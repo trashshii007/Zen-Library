@@ -961,6 +961,15 @@
             this._setDropIntent({ kind: "row", target, placeAfter: true }, wsId);
         }
 
+        _lastUnpinnedDropRow(list) {
+            for (let node = list?.lastElementChild; node; node = node.previousElementSibling) {
+                if (node.classList.contains("library-workspace-separator-container")) return null;
+                if (node.classList.contains("empty-state")) continue;
+                return this._dropRowFromNode(node);
+            }
+            return null;
+        }
+
         _setDropIntent(intent, wsId) {
             this._dropIntent = intent;
             this._markDropCard(wsId);
@@ -1109,6 +1118,12 @@
             e.preventDefault();
             e.dataTransfer.dropEffect = "move";
             if (e.target.closest?.(".library-workspace-folder")) return;
+            const lastRow = this._lastUnpinnedDropRow(e.currentTarget);
+            if (lastRow?._libraryDropItem) {
+                this._setDragOver(lastRow, "after");
+                this._setDropIntent({ kind: "row", target: lastRow._libraryDropItem, placeAfter: true }, wsId);
+                return;
+            }
             this._setDragOver(null);
             this._markDropCard(wsId);
         }
@@ -1117,7 +1132,7 @@
             if (!this._draggedTabInfo) return;
             if (e.target.closest?.(".library-workspace-item, .library-workspace-separator-container, .library-workspace-folder")) return;
             e.preventDefault();
-            this._applyTabDrop(wsId, false);
+            this._commitTabDrop(wsId);
         }
 
         // One path for every drop. Order matters: pinTab/unpinTab relocate the tab into the

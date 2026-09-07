@@ -234,13 +234,22 @@
     padding-left: var(--tab-inline-padding);
     min-height: var(--tab-min-height);
     margin-block: 2px;
-    border-radius: 6px;
+    border-radius: 12px;
     cursor: pointer;
     font-size: 12px;
     box-sizing: border-box;
     flex-shrink: 0;
     position: relative;
     overflow: hidden;
+}
+
+@media (-moz-pref("layout.css.corner-shape.enabled")) {
+    .library-workspace-item,
+    .library-split-view-group,
+    .library-workspace-folder[drag-over="into"] > .library-workspace-item.folder::before,
+    .library-tab-close-button {
+        corner-shape: superellipse(var(--zen-squircle-value));
+    }
 }
 
 .library-workspace-item[drag-over] {
