@@ -50,7 +50,7 @@
             // If we have cached data, render instantly
             if (this._cachedDownloads) {
                 this.renderList(this._cachedDownloads);
-                container.classList.add("library-content-fade-in");
+                this.library.enterContent(container);
                 requestAnimationFrame(() => {
                     if (this._canRender(token, container)) container.classList.add("scrollbar-visible");
                 });
@@ -60,11 +60,12 @@
             }
 
             // No cache - show loading and fetch
-            const loading = this.el("div", { className: "empty-state library-content-fade-in" }, [
+            const loading = this.el("div", { className: "empty-state" }, [
                 this.el("div", { className: "empty-icon downloads-icon" }),
                 this.el("h3", { textContent: "Loading downloads..." }),
                 this.el("p", { textContent: "Hang tight, we're gathering your download history." })
             ]);
+            this.library.enterContent(loading);
             container.appendChild(loading);
 
             const isTransitioning = window.gZenLibrary && window.gZenLibrary._isTransitioning;
@@ -76,7 +77,7 @@
                     const l = container.querySelector(".empty-state");
                     if (l) l.remove();
                     this.renderList(downloads);
-                    container.classList.add("library-content-fade-in");
+                    this.library.enterContent(container);
                     requestAnimationFrame(() => {
                         if (this._canRender(token, container)) container.classList.add("scrollbar-visible");
                     });
@@ -889,14 +890,14 @@
                 if (!confirmed) return;
 
                 try {
-                    const file = Components.classes["@mozilla.org/file/local;1"].createInstance(Components.interfaces.nsIFile);
-                    file.initWithPath(item.targetPath);
-                    if (!file.exists()) {
+                    // IOUtils, not nsIFile: exists()/remove() are synchronous main-thread I/O
+                    // and hang the whole browser on a slow or disconnected network drive.
+                    if (!(await IOUtils.exists(item.targetPath))) {
                         Services.prompt.alert(window, "Zen Library", "That file is no longer there.");
                         return;
                     }
 
-                    file.remove(false);
+                    await IOUtils.remove(item.targetPath);
 
                     try {
                         const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");

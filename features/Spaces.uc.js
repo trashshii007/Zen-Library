@@ -124,7 +124,7 @@
                 }
             };
 
-            grid.classList.add("library-content-fade-in");
+            this.library.enterContent(grid);
 
             // Restore scroll position
             if (oldScroll > 0) {
@@ -287,45 +287,16 @@
                 ]);
 
                 const listContainer = this.el("div", { className: "library-workspace-card-list" });
+                listContainer.addEventListener("dragover", (e) => this.onCardDragOver(e, ws.uuid));
+                listContainer.addEventListener("drop", (e) => this.onCardDrop(e, ws.uuid));
+                listContainer.addEventListener("dragleave", (e) => {
+                    // dragleave also fires moving between children; only act on a real exit.
+                    if (e.currentTarget.contains(e.relatedTarget)) return;
+                    card.removeAttribute("drop-target");
+                });
+
                 const wsEl = window.gZenWorkspaces.workspaceElement(ws.uuid);
-                if (wsEl) {
-                    const pinnedContainer = wsEl.pinnedTabsContainer;
-                    const normalContainer = wsEl.tabsContainer;
-
-                    const items = [];
-                    const collect = (container) => {
-                        if (!container) return;
-                        Array.from(container.children).forEach(child => {
-                            if (child.hasAttribute('cloned') || child.hasAttribute('zen-empty-tab')) return;
-                            if (window.gBrowser.isTab(child) || window.gBrowser.isTabGroup(child)) {
-                                items.push(child);
-                            }
-                        });
-                    };
-
-                    collect(pinnedContainer);
-                    const pinnedCount = items.length;
-                    collect(normalContainer);
-
-                    let separatorCreated = false;
-                    const itemsLen = items.length;
-                    for (let i = 0; i < itemsLen; i++) {
-                        const item = items[i];
-                        if (pinnedCount > 0 && i === pinnedCount && !separatorCreated) {
-                            listContainer.appendChild(this.createWorkspaceSeparator(ws.uuid));
-                            separatorCreated = true;
-                        }
-                        this.renderItemRecursive(item, listContainer, ws.uuid);
-                    }
-
-                    if (itemsLen === 0) {
-                        listContainer.appendChild(this.el("div", {
-                            className: "empty-state",
-                            style: "padding: 20px; text-align:center; opacity:0.5; font-size: 12px;",
-                            textContent: "Empty Workspace"
-                        }));
-                    }
-                }
+                if (wsEl) this.fillWorkspaceList(listContainer, ws.uuid, wsEl);
 
                 const dragHandle = this.el("div", {
                     className: "library-workspace-drag-handle",
@@ -399,6 +370,11 @@
                         if (newIndex !== originalIndex) {
                             if (window.gZenWorkspaces && window.gZenWorkspaces.reorderWorkspace) {
                                 window.gZenWorkspaces.reorderWorkspace(ws.uuid, newIndex);
+                                // Nothing here observes workspace changes, and reorderWorkspace may
+                                // clamp the index, so resync rather than trust the dropped position.
+                                setTimeout(() => {
+                                    if (this.library.update) this.library.update();
+                                }, 100);
                             }
                         }
 
@@ -509,14 +485,36 @@
             });
         }
 
+        _collectUnpinnedTabs(container) {
+            // A Set because allItemsRecursive already returns descendants, so a nested group would queue its tabs twice.
+            const tabs = new Set();
+            const visit = (item) => {
+                if (!item) return;
+                if (item.hasAttribute?.("cloned") ||
+                    item.hasAttribute?.("zen-empty-tab") ||
+                    item.hasAttribute?.("zen-essential")) return;
+                if (window.gBrowser.isTab(item)) {
+                    if (!item.pinned) tabs.add(item);
+                    return;
+                }
+                if (window.gBrowser.isTabGroup(item)) {
+                    const children = item.allItemsRecursive || item.allItems || item.tabs || [];
+                    for (const child of children) visit(child);
+                }
+            };
+            for (const child of container?.children || []) visit(child);
+            return [...tabs];
+        }
+
         closeWorkspaceUnpinnedTabs(workspaceId) {
             const wsEl = window.gZenWorkspaces.workspaceElement(workspaceId);
-            const tabs = Array.from(wsEl?.tabsContainer?.children || []).filter(child =>
-                window.gBrowser.isTab(child) && !child.hasAttribute("zen-essential")
-            );
+            // Same unpinned section the card draws from. Direct children can be
+            // folders or split views, so we walk those instead of only isTab.
+            const tabs = this._collectUnpinnedTabs(wsEl?.tabsContainer);
 
             if (tabs.length === 0) return;
 
+            // Never pull a focused, playing, PiP, or camera/mic/screen-sharing tab out from under the user.
             let closableTabs = tabs.filter(tab => {
                 const attributes = ["selected", "multiselected", "pictureinpicture", "soundplaying"];
                 for (const attr of attributes) if (tab.hasAttribute(attr)) return false;
@@ -542,6 +540,8 @@
                 });
             }
 
+            // removeTabs detaches asynchronously, so repaint after it settles.
+            setTimeout(() => this.renderIntoExistingCard(workspaceId), 200);
         }
 
         renderItemRecursive(item, container, wsId) {
@@ -636,11 +636,10 @@
 
             const itemEl = this.el("div", {
                 className: `library-workspace-item ${tab.selected ? 'selected' : ''}`,
-                onclick: (e) => {
-                    if (this._suppressNextTabClick || e.defaultPrevented) {
-                        this._suppressNextTabClick = false;
-                        return;
-                    }
+                onclick: () => {
+                    // A drag that ended on this row fires click too; _draggedTabInfo is the
+                    // drag's own state, so it can't strand a flag if dragend never arrives.
+                    if (this._draggedTabInfo) return;
                     if (window.gZenWorkspaces.activeWorkspace !== wsId) {
                         window.gZenWorkspaces.changeWorkspaceWithID(wsId);
                     }
@@ -652,7 +651,6 @@
                 this.el("span", { className: "item-label", textContent: tab.label })
             ]);
             itemEl.draggable = true;
-            itemEl._zenLibraryTab = tab;
             itemEl.addEventListener("dragstart", (e) => this.onTabDragStart(e, tab, wsId));
             itemEl.addEventListener("dragover", (e) => this.onTabDragOver(e, tab, wsId));
             itemEl.addEventListener("dragleave", () => itemEl.removeAttribute("drag-over"));
@@ -681,7 +679,9 @@
                     } else {
                         window.gBrowser.removeTab(tab);
                     }
-                    setTimeout(() => this.renderIntoExistingCard(wsId), 0);
+                    // removeTab/unpinTab detach the tab asynchronously; repainting at 0ms
+                    // still sees it in the container and the row comes straight back.
+                    setTimeout(() => this.renderIntoExistingCard(wsId), 150);
                 }
             }, [this.el("div", { className: "icon-mask" })]);
             closeBtn.addEventListener("mousedown", (e) => {
@@ -695,12 +695,11 @@
 
         // Zen stores a user-chosen icon on the tab itself and only mirrors it into `image`
         // for loaded tabs, so an unloaded pinned tab reports its old favicon there.
+        // The favicon lives only in the `image` attribute — there is no `tab.image`
+        // property in Gecko, which is why every tab used to fall through to the default.
         getTabIcon(tab) {
             return tab.zenStaticIcon ||
                 tab.getAttribute?.("image") ||
-                tab.image ||
-                tab.icon ||
-                tab.getAttribute?.("busyicon") ||
                 "chrome://global/skin/icons/defaultFavicon.svg";
         }
 
@@ -720,7 +719,7 @@
         getWorkspaceProfileId(wsId) {
             const workspaces = ZenLibrarySpaces.getWorkspaces();
             const ws = workspaces.find(workspace => workspace.uuid === wsId);
-            return String(ws?.containerTabId || ws?.userContextId || ws?.usercontextid || ws?.containerId || ws?.defaultProfile || "0");
+            return String(ws?.containerTabId || "0");
         }
 
         isWorkspaceProfileContainer(wsId, contextId, tab) {
@@ -734,70 +733,205 @@
         }
 
         onTabDragStart(e, tab, wsId) {
-            if (!window.gBrowser?.isTab?.(tab)) {
+            // Essentials are shared across every space; moveTabsToWorkspace skips them
+            // outright, so a drag would only ever be a no-op that looked like it worked.
+            if (!window.gBrowser?.isTab?.(tab) || tab.hasAttribute("zen-essential")) {
                 e.preventDefault();
                 return;
             }
             this._draggedTabInfo = { tab, wsId };
             e.dataTransfer.effectAllowed = "move";
+            // Never read back; some platforms refuse to start a drag with an empty payload.
             e.dataTransfer.setData("text/x-zen-library-tab", tab.getAttribute("zen-tab-id") || tab.linkedPanel || tab.id || "");
             e.currentTarget.setAttribute("dragged", "true");
-            this._suppressNextTabClick = true;
+            // Reveals the pin drop zone on spaces that have nothing pinned yet.
+            this.library.shadowRoot?.querySelector?.(".library-workspace-grid")
+                ?.setAttribute("dragging-tab", "true");
         }
 
         onTabDragOver(e, targetTab, wsId) {
-            if (!this._draggedTabInfo || this._draggedTabInfo.wsId !== wsId || this._draggedTabInfo.tab === targetTab) return;
-            if (this._draggedTabInfo.tab.pinned !== targetTab.pinned) return;
+            if (!this._draggedTabInfo || this._draggedTabInfo.tab === targetTab) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = "move";
             e.currentTarget.setAttribute("drag-over", e.clientY > e.currentTarget.getBoundingClientRect().top + e.currentTarget.clientHeight / 2 ? "after" : "before");
+            this._markDropCard(wsId);
         }
 
         onTabDrop(e, targetTab, wsId) {
-            if (!this._draggedTabInfo || this._draggedTabInfo.wsId !== wsId) return;
-            const draggedTab = this._draggedTabInfo.tab;
-            if (draggedTab === targetTab || draggedTab.pinned !== targetTab.pinned) return;
-
+            if (!this._draggedTabInfo || this._draggedTabInfo.tab === targetTab) return;
             e.preventDefault();
-            const placeAfter = e.currentTarget.getAttribute("drag-over") === "after";
-            const container = targetTab.parentNode;
-            if (!container || draggedTab.parentNode !== container) return;
+            // The row's own section decides pinned-ness: rows above the separator are
+            // pinned, rows below are not.
+            this._applyTabDrop(wsId, targetTab.pinned, {
+                targetTab,
+                placeAfter: e.currentTarget.getAttribute("drag-over") === "after"
+            });
+        }
 
-            const tabs = Array.from(container.children).filter(child =>
-                window.gBrowser.isTab(child) && !child.hasAttribute("cloned") && !child.hasAttribute("zen-empty-tab")
-            );
-            if (!tabs.includes(draggedTab) || !tabs.includes(targetTab)) return;
+        // The separator is the pinned/unpinned boundary, so it is the one place where the
+        // section you land in comes from which half you drop on rather than from a row.
+        onSeparatorDragOver(e, wsId) {
+            if (!this._draggedTabInfo) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            e.currentTarget.setAttribute("drag-over", this._isTopHalf(e) ? "before" : "after");
+            this._markDropCard(wsId);
+        }
 
-            const tabsWithoutDragged = tabs.filter(tab => tab !== draggedTab);
-            const targetIndex = tabsWithoutDragged.indexOf(targetTab);
-            if (targetIndex < 0) return;
+        onSeparatorDrop(e, wsId) {
+            if (!this._draggedTabInfo) return;
+            e.preventDefault();
+            this._applyTabDrop(wsId, this._isTopHalf(e));
+        }
 
-            const referenceTab = placeAfter ? tabsWithoutDragged[targetIndex + 1] || null : targetTab;
-            container.insertBefore(draggedTab, referenceTab);
+        _isTopHalf(e) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            return e.clientY <= rect.top + rect.height / 2;
+        }
 
-            this.renderIntoExistingCard(wsId);
+        // Drop onto the card body rather than a row: append to that space's unpinned
+        // section. This is the only way to reach a workspace with no rows to aim at.
+        onCardDragOver(e, wsId) {
+            if (!this._draggedTabInfo) return;
+            if (e.target.closest?.(".library-workspace-item, .library-workspace-separator-container")) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            this._markDropCard(wsId);
+        }
+
+        onCardDrop(e, wsId) {
+            if (!this._draggedTabInfo) return;
+            if (e.target.closest?.(".library-workspace-item, .library-workspace-separator-container")) return;
+            e.preventDefault();
+            this._applyTabDrop(wsId, false);
+        }
+
+        // One path for every drop. Order matters: pinTab/unpinTab relocate the tab into the
+        // *active* workspace's containers (gBrowser.pinTab uses the global pinned container,
+        // unpinTab prepends to gZenWorkspaces.activeWorkspaceStrip), so the workspace move
+        // has to come after them to put the tab back where it was actually dropped.
+        _applyTabDrop(wsId, wantPinned, { targetTab = null, placeAfter = false } = {}) {
+            const draggedTab = this._draggedTabInfo.tab;
+            const sourceWsId = this._draggedTabInfo.wsId;
+            const changedPinned = draggedTab.pinned !== wantPinned;
+            const noop = !changedPinned && sourceWsId === wsId && !targetTab;
+
+            if (noop) {
+                this.clearTabDragState();
+                return;
+            }
+
+            if (changedPinned && !this._setTabPinned(draggedTab, wantPinned)) return;
+            if (!this._moveTabToWorkspace(draggedTab, wsId)) return;
+
+            // moveTabBefore/After route through tabbrowser's #handleTabMove, which is what
+            // recomputes every _tPos, invalidates the cached tab list, fires TabMove for
+            // session store, and handles group/split-view wrappers. A raw insertBefore on
+            // the live tab strip does none of that and silently desyncs all of it.
+            if (targetTab && targetTab.isConnected && targetTab.pinned === draggedTab.pinned) {
+                if (placeAfter) window.gBrowser.moveTabAfter(draggedTab, targetTab);
+                else window.gBrowser.moveTabBefore(draggedTab, targetTab);
+            }
+
+            this._finishTabDrop(draggedTab, sourceWsId, wsId);
+        }
+
+        _setTabPinned(tab, wantPinned) {
+            try {
+                if (wantPinned) window.gBrowser.pinTab(tab);
+                else window.gBrowser.unpinTab(tab);
+            } catch (e) {
+                console.error("[ZenLibrary Spaces] pin/unpin threw:", e);
+            }
+
+            if (tab.pinned !== wantPinned) {
+                console.warn("[ZenLibrary Spaces] Tab pinned state did not change");
+                this.clearTabDragState();
+                return false;
+            }
+            return true;
+        }
+
+        _workspaceContainerFor(tab, wsId) {
+            const wsEl = window.gZenWorkspaces?.workspaceElement?.(wsId);
+            return tab.pinned ? wsEl?.pinnedTabsContainer : wsEl?.tabsContainer;
+        }
+
+        // moveTabsToWorkspace reports success even when it skipped the tab, so confirm from
+        // where the tab actually ended up. It also early-returns without stamping the id when
+        // the tab already sits in the destination container — which is exactly what happens
+        // when pin/unpin has just relocated it into the active workspace and that *is* the
+        // destination. Stamp it the same way moveTabsToWorkspace would have.
+        _moveTabToWorkspace(tab, wsId) {
+            try {
+                window.gZenWorkspaces?.moveTabToWorkspace?.(tab, wsId);
+            } catch (e) {
+                console.error("[ZenLibrary Spaces] moveTabToWorkspace threw:", e);
+            }
+
+            if (!this._workspaceContainerFor(tab, wsId)?.contains(tab)) {
+                console.warn("[ZenLibrary Spaces] Tab was not moved to workspace", wsId);
+                this.clearTabDragState();
+                return false;
+            }
+
+            if (tab.getAttribute("zen-workspace-id") !== wsId) {
+                tab.setAttribute("zen-workspace-id", wsId);
+            }
+            return true;
+        }
+
+        _finishTabDrop(draggedTab, sourceWsId, targetWsId) {
+            const changedWorkspace = sourceWsId !== targetWsId;
+
+            // Dragging the tab you are currently looking at out of the space you are
+            // currently in would leave gBrowser.selectedTab pointing at a tab the active
+            // space no longer contains. Zen's own changeTabWorkspace resolves that by
+            // following the tab, so do the same — but only in that one case, so ordinary
+            // organising never yanks the user between spaces.
+            const shouldFollow = changedWorkspace &&
+                draggedTab.selected &&
+                window.gZenWorkspaces?.activeWorkspace === sourceWsId;
+
+            if (changedWorkspace && window.gZenWorkspaces.lastSelectedWorkspaceTabs) {
+                window.gZenWorkspaces.lastSelectedWorkspaceTabs[targetWsId] = draggedTab;
+            }
+
+            // The active space is repainted too: pin/unpin routes the tab through its
+            // containers on the way past, so its card can be stale even when uninvolved.
+            new Set([targetWsId, sourceWsId, window.gZenWorkspaces?.activeWorkspace])
+                .forEach(id => { if (id) this.renderIntoExistingCard(id); });
             this.clearTabDragState();
+
+            if (shouldFollow) window.gZenWorkspaces.changeWorkspaceWithID(targetWsId);
+        }
+
+        _markDropCard(wsId) {
+            const root = this.library.shadowRoot;
+            if (!root) return;
+            const card = root.querySelector(`.library-workspace-card[workspace-id="${CSS.escape(wsId)}"]`);
+            if (card?.hasAttribute("drop-target")) return;
+            root.querySelectorAll(".library-workspace-card[drop-target]")
+                .forEach(el => el.removeAttribute("drop-target"));
+            card?.setAttribute("drop-target", "true");
         }
 
         clearTabDragState() {
-            this.library.shadowRoot?.querySelectorAll?.(".library-workspace-item[dragged], .library-workspace-item[drag-over]")
+            const root = this.library.shadowRoot;
+            // Scoped to items: .library-workspace-card also uses [dragged] for its own
+            // reorder drag, which this must never clear out from under.
+            root?.querySelectorAll?.(".library-workspace-item[dragged], [drag-over], .library-workspace-card[drop-target]")
                 .forEach(item => {
                     item.removeAttribute("dragged");
                     item.removeAttribute("drag-over");
+                    item.removeAttribute("drop-target");
                 });
+            root?.querySelector?.(".library-workspace-grid")?.removeAttribute("dragging-tab");
             this._draggedTabInfo = null;
-            setTimeout(() => {
-                this._suppressNextTabClick = false;
-            }, 0);
         }
 
-        renderIntoExistingCard(wsId) {
-            const card = this.library.shadowRoot?.querySelector?.(`.library-workspace-card[workspace-id="${CSS.escape(wsId)}"]`);
-            const list = card?.querySelector?.(".library-workspace-card-list");
-            const wsEl = window.gZenWorkspaces?.workspaceElement?.(wsId);
-            if (!list || !wsEl) return;
-
-            list.replaceChildren();
+        // Shared by the full card render and the in-place repaint so the two cannot drift.
+        collectWorkspaceItems(wsEl) {
             const items = [];
             const collect = (container) => {
                 if (!container) return;
@@ -810,8 +944,20 @@
             collect(wsEl.pinnedTabsContainer);
             const pinnedCount = items.length;
             collect(wsEl.tabsContainer);
+            return { items, pinnedCount };
+        }
+
+        fillWorkspaceList(list, wsId, wsEl) {
+            const { items, pinnedCount } = this.collectWorkspaceItems(wsEl);
+
+            // The separator doubles as the pin/unpin drop zone, so it is rendered even with
+            // nothing pinned — otherwise such a space could never receive a pinned tab. CSS
+            // keeps that empty case hidden until a tab drag is actually in progress.
+            const separator = this.createWorkspaceSeparator(wsId);
+            if (pinnedCount === 0) separator.setAttribute("no-pinned", "true");
 
             if (items.length === 0) {
+                list.appendChild(separator);
                 list.appendChild(this.el("div", {
                     className: "empty-state",
                     style: "padding: 20px; text-align:center; opacity:0.5; font-size: 12px;",
@@ -821,11 +967,22 @@
             }
 
             items.forEach((item, index) => {
-                if (pinnedCount > 0 && index === pinnedCount) {
-                    list.appendChild(this.createWorkspaceSeparator(wsId));
-                }
+                if (index === pinnedCount) list.appendChild(separator);
                 this.renderItemRecursive(item, list, wsId);
             });
+            if (pinnedCount === items.length) list.appendChild(separator);
+        }
+
+        renderIntoExistingCard(wsId) {
+            const card = this.library.shadowRoot?.querySelector?.(`.library-workspace-card[workspace-id="${CSS.escape(wsId)}"]`);
+            const list = card?.querySelector?.(".library-workspace-card-list");
+            const wsEl = window.gZenWorkspaces?.workspaceElement?.(wsId);
+            if (!list || !wsEl) return;
+
+            const oldScroll = list.scrollTop;
+            list.replaceChildren();
+            this.fillWorkspaceList(list, wsId, wsEl);
+            list.scrollTop = oldScroll;
         }
 
         createWorkspaceSeparator(wsId) {
@@ -840,10 +997,14 @@
                 this.closeWorkspaceUnpinnedTabs(wsId);
             });
 
-            return this.el("div", { className: "library-workspace-separator-container" }, [
+            const container = this.el("div", { className: "library-workspace-separator-container" }, [
                 this.el("div", { className: "library-workspace-separator" }),
                 cleanupBtn
             ]);
+            container.addEventListener("dragover", (e) => this.onSeparatorDragOver(e, wsId));
+            container.addEventListener("drop", (e) => this.onSeparatorDrop(e, wsId));
+            container.addEventListener("dragleave", () => container.removeAttribute("drag-over"));
+            return container;
         }
 
         _ensureWorkspaceMenu() {

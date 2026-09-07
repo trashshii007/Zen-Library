@@ -171,6 +171,10 @@
             const popup = document.createXULElement("menupopup");
             popup.id = "zen-boosts-context-menu";
 
+            const editItem = document.createXULElement("menuitem");
+            editItem.id = "zen-boosts-ctx-edit";
+            editItem.setAttribute("label", "Edit boost");
+
             const renameItem = document.createXULElement("menuitem");
             renameItem.id = "zen-boosts-ctx-rename";
             renameItem.setAttribute("label", "Rename boost");
@@ -180,6 +184,7 @@
             deleteItem.setAttribute("label", "Delete boost");
 
 
+            popup.appendChild(editItem);
             popup.appendChild(renameItem);
             popup.appendChild(document.createXULElement("menuseparator"));
             popup.appendChild(deleteItem);
@@ -189,14 +194,19 @@
         _showContextMenu(event, domain, boost, onRenamed, onDeleted) {
             this._ensureContextMenu();
             const popup = document.getElementById("zen-boosts-context-menu");
+            const editItem = document.getElementById("zen-boosts-ctx-edit");
             const renameItem = document.getElementById("zen-boosts-ctx-rename");
             const deleteItem = document.getElementById("zen-boosts-ctx-delete");
 
             // Replace listeners each time to bind correct boost
+            const newEdit = editItem.cloneNode(true);
             const newRename = renameItem.cloneNode(true);
             const newDelete = deleteItem.cloneNode(true);
+            editItem.replaceWith(newEdit);
             renameItem.replaceWith(newRename);
             deleteItem.replaceWith(newDelete);
+
+            newEdit.addEventListener("command", () => this.openBoostEditor(domain, boost));
 
             newRename.addEventListener("command", () => {
                 const mgr = this._getManager();
@@ -312,7 +322,11 @@
 
                     row.onclick = (e) => {
                         if (e.target.closest(".boosts-toggle")) return;
-                        this.openBoostWithEditor(domain, boost);
+                        // [audit] SEC-2 — `domain` comes from boost storage, so the string
+                        // being navigated to is not one this code produced. Validated, then
+                        // opened with a null triggering principal rather than a system one.
+                        if (!window.ZenLibraryUtil.openExternal(window, `https://${domain}`)) return;
+                        window.gZenLibrary.close();
                     };
 
                     row.oncontextmenu = (e) => {
@@ -343,19 +357,15 @@
             this._container.appendChild(fragment);
         }
 
-        openBoostWithEditor(domain, boost) {
+        openBoostEditor(domain, boost) {
             const mgr = this._getManager();
-            const url = `https://${domain}`;
-            const spec = window.ZenLibraryUtil.safeExternalUrl(url);
+            // Same validation as the navigate path: `domain` is stored data, and
+            // openBoostWindow hands the URI to canBoostSite before doing anything.
+            const spec = window.ZenLibraryUtil.safeExternalUrl(`https://${domain}`);
             if (!mgr || !spec) return;
 
-            const uri = Services.io.newURI(spec);
-            if (!window.ZenLibraryUtil.openExternal(window, spec)) return;
-
             window.gZenLibrary.close();
-            setTimeout(() => {
-                mgr.openBoostWindow(window, boost, uri);
-            }, 0);
+            mgr.openBoostWindow(window, boost, Services.io.newURI(spec));
         }
 
         _createToggle(checked, onToggle) {

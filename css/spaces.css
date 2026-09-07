@@ -31,34 +31,6 @@
     background: transparent;
 }
 
-@media (-moz-pref("layout.css.corner-shape.enabled")) {
-    :where(
-        .library-workspace-card,
-        .library-workspace-card-placeholder,
-        .library-workspace-item,
-        .library-workspace-item .item-icon,
-        .library-workspace-icon,
-        .library-workspace-icon-empty,
-        .library-workspace-edit-button,
-        .library-workspace-menu-button,
-        .library-workspace-drag-handle,
-        .library-workspace-separator,
-        .library-workspace-cleanup-button,
-        .library-tab-close-button,
-        .library-split-view-group,
-        .library-folder-group,
-        .library-folder-chevron,
-        .library-workspace-rename-input,
-        .library-workspace-icon-container
-    ) {
-        corner-shape: superellipse(var(--zen-squircle-value));
-    }
-
-    .library-create-workspace-button {
-        corner-shape: round;
-    }
-}
-
 
 /* === 2. CREATE WORKSPACE BUTTON === */
 
@@ -188,14 +160,6 @@
     font-weight: 600;
     font-size: 13px;
     text-transform: uppercase;
-}
-
-.library-workspace-icon-empty {
-    width: 100%;
-    height: 100%;
-    border: 1px dashed var(--ws-text-color);
-    border-radius: 4px;
-    opacity: 0.8;
 }
 
 .library-workspace-name {
@@ -520,6 +484,35 @@
     z-index: 10;
 }
 
+/* Nothing pinned yet: the separator exists only as a pin drop zone, so it stays out of
+   the way until a tab is actually being dragged. */
+.library-workspace-separator-container[no-pinned] {
+    display: none;
+}
+
+.library-workspace-grid[dragging-tab] .library-workspace-separator-container[no-pinned] {
+    display: flex;
+}
+
+.library-workspace-separator-container[no-pinned] .library-workspace-cleanup-button {
+    display: none;
+}
+
+/* Widen the hit area without moving the line: dropping on a 1px target is not viable. */
+.library-workspace-grid[dragging-tab] .library-workspace-separator-container::before {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: -6px;
+    bottom: -6px;
+}
+
+.library-workspace-separator-container[drag-over] .library-workspace-separator {
+    height: 2px;
+    opacity: 0.9;
+    background: var(--ws-primary-color, var(--zen-primary-color));
+}
+
 .library-workspace-separator {
     flex: 1;
     height: 1px;
@@ -609,6 +602,18 @@
 
 /* === 10. DRAG & DROP STATES === */
 
+/* Card a dragged tab would land in. Inset because the card clips to its own bounds. */
+.library-workspace-card[drop-target="true"]::after {
+    content: "";
+    position: absolute;
+    inset: 1px;
+    border: 2px solid var(--ws-primary-color, var(--zen-primary-color));
+    border-radius: inherit;
+    opacity: 0.9;
+    pointer-events: none;
+    z-index: 3;
+}
+
 .library-workspace-grid[dragging-workspace="true"] .library-workspace-card:not([dragged="true"]) {
     opacity: 0.72;
     filter: none;
@@ -652,10 +657,6 @@
     border-radius: inherit;
 }
 
-.library-workspace-card-placeholder.entering {
-    animation: placeholderPopIn 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
 .library-workspace-card-placeholder {
     width: 224px;
     min-width: 224px;
@@ -670,18 +671,6 @@
 
 
 /* === 11. ANIMATIONS === */
-
-@keyframes placeholderPopIn {
-    0% {
-        opacity: 0;
-        transform: scale(0.9);
-    }
-
-    100% {
-        opacity: 0.5;
-        transform: scale(1);
-    }
-}
 
 /* Inline Rename Input */
 .library-workspace-rename-input {
