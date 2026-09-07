@@ -581,11 +581,13 @@
             const hasActive = allTabs.some(t => t.selected);
 
             const folderEl = this.el("div", { className: `library-workspace-folder ${isExpanded ? '' : 'collapsed'}` });
+            folderEl.dataset.folderId = folderId;
 
             const headerEl = this.el("div", {
                 className: "library-workspace-item folder",
                 onclick: (e) => {
                     e.stopPropagation();
+                    if (this._draggedTabInfo) return;
                     const currentlyExpanded = this._folderExpansion.get(folderId);
                     const newlyExpanded = !currentlyExpanded;
 
@@ -617,6 +619,7 @@
             headerEl.appendChild(iconWrapper);
 
             headerEl.appendChild(this.el("span", { className: "item-label", textContent: folder.label || "Folder" }));
+            headerEl._libraryDropItem = folder;
 
             folderEl.appendChild(headerEl);
 
@@ -627,6 +630,7 @@
             children.forEach(child => this.renderItemRecursive(child, contentEl, wsId));
 
             folderEl.appendChild(contentEl);
+            this._bindFolderDropTarget(folderEl, headerEl, contentEl, folder, wsId);
             container.appendChild(folderEl);
         }
 
@@ -651,10 +655,9 @@
                 this.el("span", { className: "item-label", textContent: tab.label })
             ]);
             itemEl.draggable = true;
+            itemEl._libraryDropItem = tab;
             itemEl.addEventListener("dragstart", (e) => this.onTabDragStart(e, tab, wsId));
-            itemEl.addEventListener("dragover", (e) => this.onTabDragOver(e, tab, wsId));
-            itemEl.addEventListener("dragleave", () => itemEl.removeAttribute("drag-over"));
-            itemEl.addEventListener("drop", (e) => this.onTabDrop(e, tab, wsId));
+            this._bindRowDropTarget(itemEl, tab, wsId);
             itemEl.addEventListener("dragend", () => this.clearTabDragState());
 
             const contextId = tab.getAttribute("usercontextid");
@@ -749,23 +752,332 @@
                 ?.setAttribute("dragging-tab", "true");
         }
 
+        _bindRowDropTarget(el, target, wsId) {
+            el.addEventListener("dragover", (e) => this.onTabDragOver(e, target, wsId));
+            el.addEventListener("dragleave", (e) => this._onRowDragLeave(e));
+            el.addEventListener("drop", (e) => this.onTabDrop(e, target, wsId));
+        }
+
+        // Match ZenDragAndDrop: folder header middle is drop-into-folder; sibling
+        // insert is one overlay line (not per-row ::before/::after).
+        _bindFolderDropTarget(folderEl, headerEl, contentEl, folder, wsId) {
+            headerEl.addEventListener("dragover", (e) => this.onFolderDragOver(e, folderEl, headerEl, folder, wsId));
+            headerEl.addEventListener("dragleave", (e) => this._onRowDragLeave(e));
+            headerEl.addEventListener("drop", (e) => this.onFolderDrop(e, wsId));
+
+            contentEl.addEventListener("dragover", (e) => this.onFolderContentDragOver(e, folderEl, folder, wsId));
+            contentEl.addEventListener("drop", (e) => this.onFolderContentDrop(e, folderEl, wsId));
+
+            // Header margin and collapsed body sit on the wrapper, not the header.
+            // Without this, that strip has no drop listener → forbidden cursor.
+            folderEl.addEventListener("dragover", (e) => this.onFolderShellDragOver(e, folderEl, headerEl, folder, wsId));
+            folderEl.addEventListener("drop", (e) => this.onFolderDrop(e, wsId));
+            folderEl.addEventListener("dragleave", (e) => this._onRowDragLeave(e));
+        }
+
+        // dragleave fires when the pointer enters a child (icon, label). Only clear when
+        // the pointer has actually left the row, or the drop line flickers off mid-hover.
+        _onRowDragLeave(e) {
+            if (e.currentTarget.contains(e.relatedTarget)) return;
+            if (e.currentTarget.hasAttribute("drag-over")) e.currentTarget.removeAttribute("drag-over");
+            const folderEl = e.currentTarget.classList.contains("library-workspace-folder")
+                ? e.currentTarget
+                : e.currentTarget.closest(".library-workspace-folder");
+            if (folderEl && !folderEl.contains(e.relatedTarget)) {
+                this._setCollapsedFolderDragIcon(null, false);
+            }
+        }
+
+        _ensureDropIndicator(list) {
+            const root = this.library.shadowRoot;
+            let el = root?.getElementById?.("library-tab-drop-indicator");
+            if (!el) el = this.el("div", { id: "library-tab-drop-indicator" });
+            if (list && el.parentElement !== list) list.appendChild(el);
+            return el;
+        }
+
+        // One overlay, like Zen's #zen-drag-indicator. Anchored to the card list so
+        // library/appcontent transforms cannot offset a position:fixed line.
+        _showDropIndicator(row, placeAfter) {
+            if (!row) {
+                this._hideDropIndicator();
+                return;
+            }
+            const list = row.closest(".library-workspace-card-list");
+            if (!list) {
+                this._hideDropIndicator();
+                return;
+            }
+            const indicator = this._ensureDropIndicator(list);
+            const rowRect = row.getBoundingClientRect();
+            const listRect = list.getBoundingClientRect();
+            const y = (placeAfter ? rowRect.bottom : rowRect.top) - listRect.top + list.scrollTop;
+            if (y < list.scrollTop - 2 || y > list.scrollTop + list.clientHeight + 2) {
+                this._hideDropIndicator();
+                return;
+            }
+            const card = row.closest(".library-workspace-card");
+            const accent = card && getComputedStyle(card).getPropertyValue("--ws-primary-color").trim();
+            if (accent) indicator.style.setProperty("--library-drop-accent", accent);
+            else indicator.style.removeProperty("--library-drop-accent");
+            indicator.style.left = "";
+            indicator.style.width = "";
+            indicator.style.top = `${Math.round(y)}px`;
+            indicator.setAttribute("visible", "true");
+        }
+
+        _hideDropIndicator() {
+            this.library.shadowRoot?.getElementById?.("library-tab-drop-indicator")
+                ?.removeAttribute("visible");
+        }
+
+        _setDragOver(el, value) {
+            const root = this.library.shadowRoot;
+            root?.querySelectorAll?.("[drag-over]").forEach(node => {
+                if (node !== el) {
+                    node.removeAttribute("drag-over");
+                    this._setCollapsedFolderDragIcon(node, false);
+                }
+            });
+
+            if (!el || !value) {
+                this._hideDropIndicator();
+                this._setCollapsedFolderDragIcon(null, false);
+                el?.removeAttribute("drag-over");
+                return;
+            }
+
+            if (value === "before" || value === "after") {
+                if (el.classList.contains("library-workspace-separator-container")) {
+                    this._hideDropIndicator();
+                    this._setCollapsedFolderDragIcon(null, false);
+                    el.setAttribute("drag-over", value);
+                    return;
+                }
+                el.removeAttribute("drag-over");
+                this._showDropIndicator(el, value === "after");
+                this._setCollapsedFolderDragIcon(el, false);
+                return;
+            }
+
+            this._hideDropIndicator();
+            el.setAttribute("drag-over", value);
+            this._setCollapsedFolderDragIcon(el, value === "into");
+        }
+
+        // Zen opens a collapsed folder icon while the pointer is over the into-folder zone.
+        _setCollapsedFolderDragIcon(el, into) {
+            const keep = into && el
+                ? (el.classList.contains("library-workspace-folder") ? el : el.closest(".library-workspace-folder"))
+                : null;
+            const keepCollapsed = keep?.classList.contains("collapsed") ? keep : null;
+            this.library.shadowRoot?.querySelectorAll?.(".library-workspace-folder.collapsed").forEach(node => {
+                if (node === keepCollapsed) return;
+                node.querySelector(":scope > .library-workspace-item.folder .folder-icon svg[state='open']")
+                    ?.setAttribute("state", "close");
+            });
+            if (!keepCollapsed) return;
+            keepCollapsed.querySelector(":scope > .library-workspace-item.folder .folder-icon svg")
+                ?.setAttribute("state", "open");
+        }
+
+        _itemIsPinned(item, wsId) {
+            if (item?.pinned) return true;
+            const wsEl = window.gZenWorkspaces?.workspaceElement?.(wsId);
+            return !!(item && wsEl?.pinnedTabsContainer?.contains(item));
+        }
+
+        _folderChildren(folder) {
+            return (folder?.allItems || folder?.tabs || []).filter(child => {
+                return !child.hasAttribute?.("cloned") && !child.hasAttribute?.("zen-empty-tab");
+            });
+        }
+
+        // zen.tabs.folder-dragover-threshold-percent: edge of the header is sibling
+        // insert, middle is drop-into-folder.
+        _folderDragoverThreshold() {
+            try {
+                const pct = Services?.prefs?.getIntPref?.("zen.tabs.folder-dragover-threshold-percent");
+                if (Number.isFinite(pct)) return Math.min(Math.max(pct / 100, 0.05), 0.45);
+            } catch (e) { }
+            return 0.2;
+        }
+
+        _canDropIntoFolder(folder, tab) {
+            if (!folder || folder.hasAttribute?.("split-view-group")) return false;
+            if (folder.isLiveFolder) {
+                const liveId = tab?.getAttribute?.("zen-live-folder-item-id");
+                if (!liveId || !liveId.startsWith(`${folder.id}:`)) return false;
+            }
+            return true;
+        }
+
+        _dropRowFromNode(node) {
+            while (node) {
+                if (node.classList.contains("library-workspace-separator-container") ||
+                    node.classList.contains("empty-state")) {
+                    node = node.nextElementSibling;
+                    continue;
+                }
+                if (node.classList.contains("library-workspace-folder")) {
+                    return node.querySelector(":scope > .library-workspace-item.folder");
+                }
+                if (node.classList.contains("library-split-view-group")) {
+                    return node.querySelector(":scope > .library-workspace-item");
+                }
+                if (node.classList.contains("library-workspace-item")) return node;
+                node = node.nextElementSibling;
+            }
+            return null;
+        }
+
+        // The later of two adjacent rows owns the gap. That way "after this" and
+        // "before the next" are the same line instead of two stacked drop zones.
+        _nextDropRow(el) {
+            let node = el.classList.contains("folder") ? el.parentElement : el;
+            let next = node.nextElementSibling;
+            while (!next) {
+                const parent = node.parentElement;
+                if (!parent || parent.classList.contains("library-workspace-card-list")) return null;
+                node = parent.classList.contains("library-workspace-folder-content")
+                    ? parent.parentElement
+                    : parent;
+                next = node.nextElementSibling;
+            }
+            // The separator is the pin boundary, not a row. Do not steal this
+            // section's "after" for the first row on the other side of it.
+            if (next.classList.contains("library-workspace-separator-container")) return null;
+            return this._dropRowFromNode(next);
+        }
+
+        _placeAfterOnRow(el, target, wsId) {
+            const nextRow = this._nextDropRow(el);
+            if (nextRow?._libraryDropItem) {
+                this._setDragOver(nextRow, "before");
+                this._setDropIntent({ kind: "row", target: nextRow._libraryDropItem, placeAfter: false }, wsId);
+                return;
+            }
+            this._setDragOver(el, "after");
+            this._setDropIntent({ kind: "row", target, placeAfter: true }, wsId);
+        }
+
+        _setDropIntent(intent, wsId) {
+            this._dropIntent = intent;
+            this._markDropCard(wsId);
+        }
+
         onTabDragOver(e, targetTab, wsId) {
             if (!this._draggedTabInfo || this._draggedTabInfo.tab === targetTab) return;
             e.preventDefault();
+            e.stopPropagation();
             e.dataTransfer.dropEffect = "move";
-            e.currentTarget.setAttribute("drag-over", e.clientY > e.currentTarget.getBoundingClientRect().top + e.currentTarget.clientHeight / 2 ? "after" : "before");
-            this._markDropCard(wsId);
+            const placeAfter = e.clientY > e.currentTarget.getBoundingClientRect().top + e.currentTarget.clientHeight / 2;
+            if (placeAfter) {
+                this._placeAfterOnRow(e.currentTarget, targetTab, wsId);
+                return;
+            }
+            this._setDragOver(e.currentTarget, "before");
+            this._setDropIntent({ kind: "row", target: targetTab, placeAfter: false }, wsId);
         }
 
         onTabDrop(e, targetTab, wsId) {
             if (!this._draggedTabInfo || this._draggedTabInfo.tab === targetTab) return;
             e.preventDefault();
-            // The row's own section decides pinned-ness: rows above the separator are
-            // pinned, rows below are not.
-            this._applyTabDrop(wsId, targetTab.pinned, {
-                targetTab,
-                placeAfter: e.currentTarget.getAttribute("drag-over") === "after"
-            });
+            e.stopPropagation();
+            this._commitTabDrop(wsId);
+        }
+
+        onFolderDragOver(e, folderEl, headerEl, folder, wsId) {
+            if (!this._draggedTabInfo) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = "move";
+            const rect = headerEl.getBoundingClientRect();
+            const overlapPercent = rect.height ? (e.clientY - rect.top) / rect.height : 0.5;
+            const threshold = this._folderDragoverThreshold();
+            const canInto = this._canDropIntoFolder(folder, this._draggedTabInfo.tab);
+            const edgeBefore = overlapPercent < threshold;
+
+            if (!canInto) {
+                if (overlapPercent > 0.5) this._placeAfterOnRow(headerEl, folder, wsId);
+                else {
+                    this._setDragOver(headerEl, "before");
+                    this._setDropIntent({ kind: "row", target: folder, placeAfter: false }, wsId);
+                }
+                return;
+            }
+
+            if (edgeBefore) {
+                this._setDragOver(headerEl, "before");
+                this._setDropIntent({ kind: "row", target: folder, placeAfter: false }, wsId);
+                return;
+            }
+
+            // Last pinned tab already keeps an "after" because the separator is a
+            // wall. Last pinned folder was all "into", so that gap had no line.
+            const lastInSection = !this._nextDropRow(headerEl);
+            const afterIsAtHeader = folderEl.classList.contains("collapsed") ||
+                this._folderChildren(folder).length < 1;
+            if (lastInSection && afterIsAtHeader && overlapPercent > 0.5) {
+                this._setDragOver(headerEl, "after");
+                this._setDropIntent({ kind: "row", target: folder, placeAfter: true }, wsId);
+                return;
+            }
+
+            this._setDragOver(folderEl, "into");
+            this._setDropIntent({ kind: "into", folder }, wsId);
+        }
+
+        onFolderDrop(e, wsId) {
+            if (!this._draggedTabInfo) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._commitTabDrop(wsId);
+        }
+
+        onFolderShellDragOver(e, folderEl, headerEl, folder, wsId) {
+            if (!this._draggedTabInfo) return;
+            if (e.target.closest(".library-workspace-item") && e.target !== folderEl) return;
+            this.onFolderDragOver(e, folderEl, headerEl, folder, wsId);
+        }
+
+        onFolderContentDragOver(e, folderEl, folder, wsId) {
+            if (!this._draggedTabInfo) return;
+            if (e.target.closest(".library-workspace-item")) return;
+            const nested = e.target.closest(".library-workspace-folder");
+            if (nested && nested !== folderEl) return;
+            if (!this._canDropIntoFolder(folder, this._draggedTabInfo.tab)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = "move";
+            this._setDragOver(folderEl, "into");
+            this._setDropIntent({ kind: "into", folder }, wsId);
+        }
+
+        onFolderContentDrop(e, folderEl, wsId) {
+            if (!this._draggedTabInfo) return;
+            if (e.target.closest(".library-workspace-item")) return;
+            const nested = e.target.closest(".library-workspace-folder");
+            if (nested && nested !== folderEl) return;
+            e.preventDefault();
+            e.stopPropagation();
+            this._commitTabDrop(wsId);
+        }
+
+        _commitTabDrop(wsId) {
+            const intent = this._dropIntent;
+            if (intent?.kind === "into" && intent.folder) {
+                this._applyTabDrop(wsId, this._itemIsPinned(intent.folder, wsId), { targetFolder: intent.folder });
+                return;
+            }
+            if (intent?.kind === "row" && intent.target) {
+                this._applyTabDrop(wsId, this._itemIsPinned(intent.target, wsId), {
+                    targetTab: intent.target,
+                    placeAfter: !!intent.placeAfter
+                });
+                return;
+            }
+            this._applyTabDrop(wsId, false);
         }
 
         // The separator is the pinned/unpinned boundary, so it is the one place where the
@@ -774,7 +1086,7 @@
             if (!this._draggedTabInfo) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = "move";
-            e.currentTarget.setAttribute("drag-over", this._isTopHalf(e) ? "before" : "after");
+            this._setDragOver(e.currentTarget, this._isTopHalf(e) ? "before" : "after");
             this._markDropCard(wsId);
         }
 
@@ -796,12 +1108,14 @@
             if (e.target.closest?.(".library-workspace-item, .library-workspace-separator-container")) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = "move";
+            if (e.target.closest?.(".library-workspace-folder")) return;
+            this._setDragOver(null);
             this._markDropCard(wsId);
         }
 
         onCardDrop(e, wsId) {
             if (!this._draggedTabInfo) return;
-            if (e.target.closest?.(".library-workspace-item, .library-workspace-separator-container")) return;
+            if (e.target.closest?.(".library-workspace-item, .library-workspace-separator-container, .library-workspace-folder")) return;
             e.preventDefault();
             this._applyTabDrop(wsId, false);
         }
@@ -810,11 +1124,11 @@
         // *active* workspace's containers (gBrowser.pinTab uses the global pinned container,
         // unpinTab prepends to gZenWorkspaces.activeWorkspaceStrip), so the workspace move
         // has to come after them to put the tab back where it was actually dropped.
-        _applyTabDrop(wsId, wantPinned, { targetTab = null, placeAfter = false } = {}) {
+        _applyTabDrop(wsId, wantPinned, { targetTab = null, placeAfter = false, targetFolder = null } = {}) {
             const draggedTab = this._draggedTabInfo.tab;
             const sourceWsId = this._draggedTabInfo.wsId;
             const changedPinned = draggedTab.pinned !== wantPinned;
-            const noop = !changedPinned && sourceWsId === wsId && !targetTab;
+            const noop = !changedPinned && sourceWsId === wsId && !targetTab && !targetFolder;
 
             if (noop) {
                 this.clearTabDragState();
@@ -824,16 +1138,34 @@
             if (changedPinned && !this._setTabPinned(draggedTab, wantPinned)) return;
             if (!this._moveTabToWorkspace(draggedTab, wsId)) return;
 
-            // moveTabBefore/After route through tabbrowser's #handleTabMove, which is what
-            // recomputes every _tPos, invalidates the cached tab list, fires TabMove for
-            // session store, and handles group/split-view wrappers. A raw insertBefore on
-            // the live tab strip does none of that and silently desyncs all of it.
-            if (targetTab && targetTab.isConnected && targetTab.pinned === draggedTab.pinned) {
+            if (targetFolder) {
+                this._addTabToFolder(draggedTab, targetFolder);
+            } else if (targetTab && targetTab.isConnected && this._itemIsPinned(targetTab, wsId) === draggedTab.pinned) {
+                // moveTabBefore/After route through tabbrowser's #handleTabMove, which is what
+                // recomputes every _tPos, invalidates the cached tab list, fires TabMove for
+                // session store, and handles group/split-view wrappers. A raw insertBefore on
+                // the live tab strip does none of that and silently desyncs all of it.
                 if (placeAfter) window.gBrowser.moveTabAfter(draggedTab, targetTab);
                 else window.gBrowser.moveTabBefore(draggedTab, targetTab);
             }
 
             this._finishTabDrop(draggedTab, sourceWsId, wsId);
+        }
+
+        _addTabToFolder(tab, folder) {
+            if (!folder || !tab) return;
+            try {
+                if (typeof folder.addTabs === "function") {
+                    folder.addTabs([tab]);
+                    return;
+                }
+            } catch (e) {
+                console.error("[ZenLibrary Spaces] folder.addTabs threw:", e);
+            }
+            const last = this._folderChildren(folder).at(-1);
+            if (last && last !== tab && last.isConnected) {
+                window.gBrowser.moveTabAfter(tab, last);
+            }
         }
 
         _setTabPinned(tab, wantPinned) {
@@ -922,12 +1254,15 @@
             // reorder drag, which this must never clear out from under.
             root?.querySelectorAll?.(".library-workspace-item[dragged], [drag-over], .library-workspace-card[drop-target]")
                 .forEach(item => {
+                    this._setCollapsedFolderDragIcon(item, false);
                     item.removeAttribute("dragged");
                     item.removeAttribute("drag-over");
                     item.removeAttribute("drop-target");
                 });
             root?.querySelector?.(".library-workspace-grid")?.removeAttribute("dragging-tab");
+            this._hideDropIndicator();
             this._draggedTabInfo = null;
+            this._dropIntent = null;
         }
 
         // Shared by the full card render and the in-place repaint so the two cannot drift.
@@ -950,11 +1285,11 @@
         fillWorkspaceList(list, wsId, wsEl) {
             const { items, pinnedCount } = this.collectWorkspaceItems(wsEl);
 
-            // The separator doubles as the pin/unpin drop zone, so it is rendered even with
-            // nothing pinned — otherwise such a space could never receive a pinned tab. CSS
-            // keeps that empty case hidden until a tab drag is actually in progress.
+            // The separator doubles as the pin/unpin drop zone, so it is still in the
+            // DOM when there is nothing unpinned. CSS hides that case until a tab drag
+            // is in progress; Clear only belongs on the row when there are unpinned tabs.
             const separator = this.createWorkspaceSeparator(wsId);
-            if (pinnedCount === 0) separator.setAttribute("no-pinned", "true");
+            if (items.length === pinnedCount) separator.setAttribute("no-unpinned", "true");
 
             if (items.length === 0) {
                 list.appendChild(separator);
@@ -1003,7 +1338,7 @@
             ]);
             container.addEventListener("dragover", (e) => this.onSeparatorDragOver(e, wsId));
             container.addEventListener("drop", (e) => this.onSeparatorDrop(e, wsId));
-            container.addEventListener("dragleave", () => container.removeAttribute("drag-over"));
+            container.addEventListener("dragleave", (e) => this._onRowDragLeave(e));
             return container;
         }
 

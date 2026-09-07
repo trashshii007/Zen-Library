@@ -224,6 +224,7 @@
     scrollbar-width: none;
     min-height: 0;
     padding-top: 1px;
+    position: relative;
 }
 
 .library-workspace-item {
@@ -242,6 +243,14 @@
     overflow: hidden;
 }
 
+.library-workspace-item[drag-over] {
+    overflow: visible;
+}
+
+.library-workspace-grid[dragging-tab] .library-workspace-item {
+    z-index: 1;
+}
+
 .library-workspace-item:hover {
     background: var(--zen-library-hover-bg, var(--ws-tab-hover-color));
 }
@@ -255,23 +264,61 @@
     opacity: 0.45;
 }
 
-.library-workspace-item[drag-over="before"]::before,
-.library-workspace-item[drag-over="after"]::after {
+#library-tab-drop-indicator {
+    --library-drop-indicator-height: 2px;
+    --library-drop-indicator-bg: color-mix(in srgb, var(--library-drop-accent, var(--zen-primary-color, currentColor)) 50%, light-dark(rgba(0, 0, 0, 0.85), rgba(255, 255, 255, 0.95)) 50%);
+    position: absolute;
+    z-index: 20;
+    display: none;
+    pointer-events: none;
+    box-sizing: border-box;
+    inset-inline: 10px;
+    width: auto;
+    height: var(--library-drop-indicator-height);
+    padding-inline-start: 10px;
+    border-radius: 5px;
+    background: var(--library-drop-indicator-bg);
+    background-clip: content-box;
+    transform: translateY(-50%);
+}
+
+#library-tab-drop-indicator[visible] {
+    display: block;
+}
+
+#library-tab-drop-indicator::before {
     content: "";
     position: absolute;
-    inset-inline: 10px;
-    height: 2px;
-    border-radius: 2px;
-    background: currentColor;
-    opacity: 0.75;
+    height: calc(2 * var(--library-drop-indicator-height));
+    width: calc(2 * var(--library-drop-indicator-height));
+    border: var(--library-drop-indicator-height) solid var(--library-drop-indicator-bg);
+    border-radius: 50%;
+    background: transparent;
+    inset-inline-start: 0;
+    top: 50%;
+    transform: translateY(-50%);
 }
 
-.library-workspace-item[drag-over="before"]::before {
-    top: 0;
+.library-workspace-folder[drag-over="into"] > .library-workspace-item.folder {
+    overflow: visible;
+    z-index: 2;
 }
 
-.library-workspace-item[drag-over="after"]::after {
-    bottom: 0;
+.library-workspace-folder[drag-over="into"] > .library-workspace-item.folder::before {
+    content: "";
+    position: absolute;
+    inset: 2px;
+    height: auto;
+    border-radius: 6px;
+    background: var(--ws-primary-color, var(--zen-primary-color));
+    opacity: 1;
+    pointer-events: none;
+    z-index: -1;
+}
+
+.library-workspace-item[drag-over="into"]::before,
+.library-workspace-item[drag-over="into"]::after {
+    content: none;
 }
 
 .library-workspace-item.selected {
@@ -370,6 +417,19 @@
 .library-workspace-folder {
     flex-shrink: 0;
     width: 100%;
+}
+
+.library-workspace-grid[dragging-tab] .library-workspace-folder {
+    position: relative;
+    z-index: 1;
+}
+
+.library-workspace-grid[dragging-tab] .library-workspace-folder::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: 100%;
+    height: 8px;
 }
 
 .library-workspace-folder.collapsed>.library-workspace-folder-content {
@@ -481,21 +541,24 @@
     align-items: center;
     margin: 2px 2px 3px;
     position: relative;
-    z-index: 10;
 }
 
-/* Nothing pinned yet: the separator exists only as a pin drop zone, so it stays out of
-   the way until a tab is actually being dragged. */
-.library-workspace-separator-container[no-pinned] {
+/* Nothing unpinned: no Clear target, so the row stays out of the way unless a tab is
+   being dragged (it is still the pin/unpin drop zone). */
+.library-workspace-separator-container[no-unpinned] {
     display: none;
 }
 
-.library-workspace-grid[dragging-tab] .library-workspace-separator-container[no-pinned] {
+.library-workspace-grid[dragging-tab] .library-workspace-separator-container[no-unpinned] {
     display: flex;
 }
 
-.library-workspace-separator-container[no-pinned] .library-workspace-cleanup-button {
+.library-workspace-separator-container[no-unpinned] .library-workspace-cleanup-button {
     display: none;
+}
+
+.library-workspace-grid[dragging-tab] .library-workspace-cleanup-button {
+    pointer-events: none !important;
 }
 
 /* Widen the hit area without moving the line: dropping on a 1px target is not viable. */
