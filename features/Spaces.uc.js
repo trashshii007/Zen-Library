@@ -1166,7 +1166,23 @@
 
         onFolderShellDragOver(e, folderEl, headerEl, folder, wsId) {
             if (!this._draggedTabInfo) return;
+            if (this._maybeRedirectTabDrag(e)) return;
             if (e.target.closest(".library-workspace-item") && e.target !== folderEl) return;
+
+            // The ::after slop and wrapper below the last child are the gap between
+            // this folder and the next, not drop-into.
+            const contentEl = folderEl.querySelector(":scope > .library-workspace-folder-content");
+            const bodyBottom = (!folderEl.classList.contains("collapsed") && contentEl)
+                ? contentEl.getBoundingClientRect().bottom
+                : headerEl.getBoundingClientRect().bottom;
+            if (e.target === folderEl && e.clientY >= bodyBottom) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = "move";
+                this._placeAfterOnRow(headerEl, folder, wsId);
+                return;
+            }
+
             this.onFolderDragOver(e, folderEl, headerEl, folder, wsId);
         }
 
