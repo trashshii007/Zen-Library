@@ -958,7 +958,8 @@
 
         _dropRowFromNode(node) {
             while (node) {
-                if (node.classList.contains("library-workspace-separator-container") ||
+                if (node.id === "library-tab-drop-indicator" ||
+                    node.classList.contains("library-workspace-separator-container") ||
                     node.classList.contains("empty-state")) {
                     node = node.nextElementSibling;
                     continue;
@@ -1015,9 +1016,11 @@
 
         _lastUnpinnedDropRow(list) {
             for (let node = list?.lastElementChild; node; node = node.previousElementSibling) {
+                if (node.id === "library-tab-drop-indicator") continue;
                 if (node.classList.contains("library-workspace-separator-container")) return null;
                 if (node.classList.contains("empty-state")) continue;
-                return this._dropRowFromNode(node);
+                const row = this._dropRowFromNode(node);
+                if (row) return row;
             }
             return null;
         }
@@ -1226,6 +1229,14 @@
                     targetTab: intent.target,
                     placeAfter: !!intent.placeAfter
                 });
+                return;
+            }
+            const card = this.library.shadowRoot?.querySelector?.(
+                `.library-workspace-card[workspace-id="${CSS.escape(wsId)}"]`
+            );
+            const lastRow = this._lastUnpinnedDropRow(card?.querySelector(".library-workspace-card-list"));
+            if (lastRow?._libraryDropItem) {
+                this._applyTabDrop(wsId, false, { targetTab: lastRow._libraryDropItem, placeAfter: true });
                 return;
             }
             this._applyTabDrop(wsId, false);
