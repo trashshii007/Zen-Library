@@ -220,11 +220,13 @@
 
 .library-workspace-card-list {
     flex: 1;
+    overflow-x: hidden;
     overflow-y: auto;
     scrollbar-width: none;
     min-height: 0;
     padding-top: 1px;
     position: relative;
+    isolation: isolate;
 }
 
 .library-workspace-item {
@@ -256,10 +258,6 @@
     overflow: visible;
 }
 
-.library-workspace-grid[dragging-tab] .library-workspace-item {
-    z-index: 1;
-}
-
 .library-workspace-item:hover {
     background: var(--zen-library-hover-bg, var(--ws-tab-hover-color));
 }
@@ -276,18 +274,18 @@
 #library-tab-drop-indicator {
     --library-drop-indicator-height: 2px;
     --library-drop-indicator-bg: color-mix(in srgb, var(--library-drop-accent, var(--zen-primary-color, currentColor)) 50%, light-dark(rgba(0, 0, 0, 0.85), rgba(255, 255, 255, 0.95)) 50%);
+    --indicator-left: 0px;
+    --indicator-width: 0px;
     position: absolute;
     z-index: 20;
     display: none;
     pointer-events: none;
     box-sizing: border-box;
-    inset-inline: 10px;
-    width: auto;
+    left: calc(var(--indicator-left) + 2 * var(--library-drop-indicator-height) + 4px);
+    width: calc(var(--indicator-width) - 2 * var(--library-drop-indicator-height) - 4px);
     height: var(--library-drop-indicator-height);
-    padding-inline-start: 10px;
     border-radius: 5px;
     background: var(--library-drop-indicator-bg);
-    background-clip: content-box;
     transform: translateY(-50%);
 }
 
@@ -303,9 +301,9 @@
     border: var(--library-drop-indicator-height) solid var(--library-drop-indicator-bg);
     border-radius: 50%;
     background: transparent;
-    inset-inline-start: 0;
+    left: calc(-2 * var(--library-drop-indicator-height));
     top: 50%;
-    transform: translateY(-50%);
+    transform: translate(calc(-1 * var(--library-drop-indicator-height)), -50%);
 }
 
 .library-workspace-folder[drag-over="into"] > .library-workspace-item.folder {
@@ -430,12 +428,12 @@
 
 .library-workspace-grid[dragging-tab] .library-workspace-folder {
     position: relative;
-    z-index: 1;
 }
 
 .library-workspace-grid[dragging-tab] .library-workspace-folder::after {
     content: "";
     position: absolute;
+    z-index: 2;
     inset-inline: 0;
     top: 100%;
     height: 8px;
