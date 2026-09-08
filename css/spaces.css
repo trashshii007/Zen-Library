@@ -227,6 +227,8 @@
     padding-top: 1px;
     position: relative;
     isolation: isolate;
+    display: flex;
+    flex-direction: column;
 }
 
 .library-workspace-item {
@@ -426,11 +428,13 @@
     width: 100%;
 }
 
-.library-workspace-grid[dragging-tab] .library-workspace-folder {
+.library-workspace-grid[dragging-tab] .library-workspace-folder,
+.library-workspace-grid[dragging-folder] .library-workspace-folder {
     position: relative;
 }
 
-.library-workspace-grid[dragging-tab] .library-workspace-folder::after {
+.library-workspace-grid[dragging-tab] .library-workspace-folder::after,
+.library-workspace-grid[dragging-folder] .library-workspace-folder::after {
     content: "";
     position: absolute;
     z-index: 2;
@@ -556,7 +560,8 @@
     display: none;
 }
 
-.library-workspace-grid[dragging-tab] .library-workspace-separator-container[no-unpinned] {
+.library-workspace-grid[dragging-tab] .library-workspace-separator-container[no-unpinned],
+.library-workspace-grid[dragging-folder] .library-workspace-separator-container[no-unpinned] {
     display: flex;
 }
 
@@ -564,17 +569,50 @@
     display: none;
 }
 
-.library-workspace-grid[dragging-tab] .library-workspace-cleanup-button {
+.library-workspace-grid[dragging-tab] .library-workspace-cleanup-button,
+.library-workspace-grid[dragging-folder] .library-workspace-cleanup-button {
     pointer-events: none !important;
 }
 
 /* Widen the hit area without moving the line: dropping on a 1px target is not viable. */
-.library-workspace-grid[dragging-tab] .library-workspace-separator-container::before {
+.library-workspace-grid[dragging-tab] .library-workspace-separator-container::before,
+.library-workspace-grid[dragging-folder] .library-workspace-separator-container::before {
     content: "";
     position: absolute;
     inset-inline: 0;
     top: -6px;
     bottom: -6px;
+}
+
+.library-workspace-unpinned-section {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 8px;
+    display: flex;
+    flex-direction: column;
+}
+
+.library-workspace-unpinned-mask {
+    display: block;
+    opacity: 0;
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    border-radius: 8px;
+    background: light-dark(
+        color-mix(in srgb, black 32%, transparent),
+        color-mix(in srgb, black 52%, transparent)
+    );
+    transition: opacity 0.15s ease;
+}
+
+.library-workspace-grid[dragging-folder] .library-workspace-unpinned-mask {
+    opacity: 1;
+}
+
+.library-workspace-grid[dragging-folder] .library-workspace-unpinned-section {
+    pointer-events: none;
 }
 
 .library-workspace-separator-container[drag-over] .library-workspace-separator {
