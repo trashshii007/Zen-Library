@@ -248,6 +248,31 @@
   animation-name: blockSlideOutRight;
 }
 
+/* Window-buttons dock. Hidden while empty so the sidebar rhythm is unchanged
+   otherwise. The live .titlebar-buttonbox-container is slotted in from light
+   DOM (not cloned) so Firefox still toggles max vs restore on sizemode. */
+.zen-library-sidebar-top {
+  display: none;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 0 8px 4px;
+  margin-top: -3px;
+  margin-left: 20px;
+  -moz-window-dragging: drag;
+  flex-shrink: 0;
+  width: 100%;
+}
+
+:host([window-buttons]) .zen-library-sidebar-top {
+  display: flex;
+}
+
+.zen-library-sidebar-top ::slotted(.titlebar-buttonbox-container) {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  width: fit-content;
+}
+
 #zen-library-sidebar-container .sidebar-items {
   flex: 1;
   display: flex;
@@ -323,19 +348,10 @@
   opacity: 1;
 }
 
-/* Window-buttons dock (PR adopts the real traffic lights past 60% open).
-   Hidden while empty so the sidebar rhythm is unchanged otherwise. */
-.zen-library-sidebar-top {
-  display: flex;
-  align-items: center;
-  padding: 10px 0 0 10px;
-  -moz-window-dragging: drag;
-}
-
-.zen-library-sidebar-top:empty {
-  display: none;
-}
-
+/* Footer icons follow Zen's sidebar action buttons (#zen-expand-sidebar-button,
+   #zen-create-new-button): context-fill from --toolbarbutton-icon-fill, which
+   Zen sets to currentColor. Chrome toolbarbutton-1 rules do not pierce this
+   shadow tree, so the contract is restated here. */
 .sidebar-button-footer {
   margin-top: auto;
   width: 100%;
@@ -353,14 +369,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  opacity: 0.65;
   cursor: pointer;
   -moz-window-dragging: no-drag;
+  -moz-context-properties: fill, fill-opacity;
+  fill: var(--toolbarbutton-icon-fill, currentColor);
 }
 
-/* Native XUL buttons bring their own theme box, hover highlight and sizing —
-   only reset what the PR resets (hide the text label). The plain-button
-   fallback carries a fixed box. */
 .sidebar-footer-button:not(toolbarbutton) {
   appearance: none;
   border: none;
@@ -370,31 +384,46 @@
   padding: 0;
 }
 
-.sidebar-footer-button:not(toolbarbutton):hover {
-  opacity: 1;
-  background: var(--tab-hover-background-color, rgba(255, 255, 255, 0.1));
-}
-
-:host .sidebar-footer-button.toolbarbutton-1 .toolbarbutton-text {
+:host .sidebar-footer-button.toolbarbutton-1 .toolbarbutton-text,
+:host .sidebar-footer-button.zen-sidebar-action-button .toolbarbutton-text {
   display: none;
 }
 
-/* Native footer buttons: give the theme icon breathing room so the glyph
-   never touches the button edge, and keep the two buttons clear of each
-   other inside the space-between footer. */
 :host toolbarbutton.sidebar-footer-button {
-  padding: 6px !important;
+  appearance: none;
+  padding: var(--toolbarbutton-inner-padding, 6px) !important;
   margin: 0 2px;
 }
 
-.sidebar-footer-button:hover {
-  opacity: 1;
+:host toolbarbutton.sidebar-footer-button > .toolbarbutton-icon {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+}
+
+:host .sidebar-button-exit {
+  list-style-image: url("chrome://browser/skin/zen-icons/back.svg");
+}
+
+:host .sidebar-button-donate {
+  list-style-image: url("chrome://browser/skin/zen-icons/heart-circle-fill.svg");
+}
+
+/* Same wash as .sidebar-button:hover. :host toolbarbutton.sidebar-footer-button
+   is more specific than .sidebar-footer-button:hover, so hover has to repeat
+   that selector or the resting rule (or XUL appearance) wins and nothing paints. */
+.sidebar-footer-button:hover,
+:host toolbarbutton.sidebar-footer-button:hover {
   background: var(--tab-hover-background-color, rgba(255, 255, 255, 0.1));
 }
 
+.sidebar-footer-button:hover:active {
+  transform: scale(0.95);
+}
+
 .sidebar-footer-button .icon {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   opacity: 1;
 }
 
@@ -412,8 +441,8 @@
   mask-repeat: no-repeat;
   mask-position: center;
   background-color: currentColor !important;
-  width: 14px !important;
-  height: 14px !important;
+  width: 16px !important;
+  height: 16px !important;
 }
 
 .donate-icon {
@@ -422,8 +451,8 @@
   mask-repeat: no-repeat;
   mask-position: center;
   background-color: currentColor !important;
-  width: 14px !important;
-  height: 14px !important;
+  width: 16px !important;
+  height: 16px !important;
 }
 
 /* MAIN PANEL */

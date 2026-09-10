@@ -98,6 +98,36 @@
     box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
     contain: strict;
     transition: opacity 0.16s ease, transform 0.12s ease;
+
+    /* Native zen-folder + vertical-tab tokens, resolved against this space's
+       --zen-primary-color (set in JS) and the card's color-scheme. :root's
+       copies stay computed against the window theme, so they are restated. */
+    --zen-folder-indent: 14px;
+    --zen-colors-primary: light-dark(
+        color-mix(in srgb, var(--zen-primary-color) 50%, black 50%),
+        color-mix(in srgb, var(--zen-primary-color) 20%, var(--zen-branding-bg, #101010) 80%)
+    );
+    --zen-folder-behind-bgcolor: light-dark(
+        color-mix(in srgb, var(--zen-primary-color) 60%, gray),
+        color-mix(in srgb, var(--zen-primary-color) 60%, #c1c1c1)
+    );
+    --zen-folder-front-bgcolor: light-dark(
+        color-mix(in srgb, var(--zen-primary-color), white 70%),
+        color-mix(in srgb, var(--zen-primary-color), black 40%)
+    );
+    --zen-folder-stroke: light-dark(
+        color-mix(in srgb, var(--zen-primary-color) 50%, black),
+        color-mix(in srgb, var(--zen-colors-primary) 15%, #ebebeb)
+    );
+    --tab-background-color-hover: var(
+        --zen-toolbar-element-bg-hover,
+        light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.1))
+    );
+    --tab-background-color-selected: light-dark(
+        color-mix(in srgb, rgba(255, 255, 255, 0.8) 98%, var(--zen-primary-color)),
+        color-mix(in srgb, rgba(255, 255, 255, 0.18) 95%, var(--zen-primary-color))
+    );
+    --tab-box-shadow-selected: 0 0.8px 1.5px 0px light-dark(rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0.05));
 }
 
 .library-workspace-card::before {
@@ -284,7 +314,7 @@
 }
 
 .library-workspace-item:hover {
-    background: var(--zen-library-hover-bg, var(--ws-tab-hover-color));
+    background: var(--tab-background-color-hover, var(--zen-library-hover-bg));
 }
 
 .library-workspace-item[draggable="true"] {
@@ -354,8 +384,8 @@
 }
 
 .library-workspace-item.selected {
-    background: var(--ws-tab-selected-color);
-    box-shadow: var(--ws-tab-selected-shadow);
+    background: var(--tab-background-color-selected);
+    box-shadow: var(--tab-box-shadow-selected);
 }
 
 .library-workspace-item .item-icon {
@@ -371,7 +401,7 @@
 
 /* Native missing-icon tile: tabs with no favicon (blank, about:x) render Zen's
    primary-color placeholder instead of the default globe. Scoped to img —
-   folder icons use a span.item-icon wrapper and must not match. */
+   folder icons use a span.folder-icon wrapper and must not match. */
 .library-workspace-item img.item-icon:not([src]),
 .library-workspace-item img.item-icon:-moz-broken {
     content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3C/svg%3E") !important;
@@ -398,17 +428,21 @@
     right: 6px;
     top: 50%;
     transform: translateY(-50%);
-    width: 24px;
-    height: 24px;
+    width: var(--size-item-medium, 24px);
+    height: var(--size-item-medium, 24px);
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: var(--border-radius-small, 4px);
+    border-radius: var(--tab-border-radius, 8px);
+    padding: var(--tab-close-button-padding, 4px);
+    box-sizing: border-box;
     opacity: 0;
     pointer-events: none;
     cursor: pointer;
     background: transparent;
-    color: var(--ws-text-color, inherit);
+    color: inherit;
+    fill: currentColor;
+    -moz-context-properties: fill, fill-opacity;
 }
 
 .library-tab-close-button .icon-mask {
@@ -436,7 +470,11 @@
 
 .library-tab-close-button:hover {
     opacity: 1 !important;
-    background: var(--ws-tab-hover-color);
+    background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.library-tab-close-button:hover:active {
+    background: color-mix(in srgb, currentColor 20%, transparent);
 }
 
 .library-tab-identity-line {
@@ -453,26 +491,22 @@
 
 /* === 6. FOLDERS & SPECIALIZED ICONS === */
 
+/* Mirror zen-folder's .tab-group-label-container: the glyph is the
+   expand/collapse affordance. No chevron. */
+.library-workspace-item.folder {
+    gap: 0;
+    padding-inline-start: 0;
+    font-weight: 600;
+    overflow: visible;
+}
+
 .library-workspace-item.folder .item-label {
-    font-weight: 600 !important;
+    font-weight: 600;
+    padding-inline-start: 32px;
 }
 
-/* The chevron overlays the row gutter instead of taking layout space, so the
-   folder icon and label start at exactly the same x as tab rows
-   (.library-workspace-item is already position: relative). */
-.folder-chevron {
-    position: absolute;
-    left: 0;
-    top: 50%;
-    translate: 0 -50%;
-    width: 8px;
-    display: flex;
-    justify-content: center;
-    pointer-events: none;
-}
-
-.folder-chevron svg {
-    flex-shrink: 0;
+.library-workspace-item.folder:hover .item-label {
+    mask-image: linear-gradient(to left, transparent, black var(--tab-label-mask-size, 2em));
 }
 
 .library-workspace-folder {
@@ -495,34 +529,60 @@
     height: 8px;
 }
 
-.library-workspace-folder.collapsed>.library-workspace-folder-content {
-    max-height: 0;
-    opacity: 0.5;
-    transform: translateY(-10px);
+.library-workspace-folder.collapsed > .library-workspace-folder-content {
     pointer-events: none;
 }
 
+/* Zen does not animate this box's height. A zero-size spacer
+   (.library-folder-group-start, native .zen-tab-group-start) takes a
+   negative margin-top and overflow-y: clip hides the rows as they slide
+   up under the header. After the animation Zen sets hidden on the
+   container; we do the same so a missed measure cannot leave rows
+   painted.
+
+   Flex column like Zen's .tab-group-container, and not incidentally:
+   overflow: clip does not establish a block formatting context, so as a
+   plain block the spacer's negative margin-top would collapse through
+   and drag this box (clip rect included) up over the folder header
+   instead of pulling the rows up inside it. */
 .library-workspace-folder-content {
-    margin-inline-start: 16px;
-    transition: max-height 0.15s var(--zen-library-easing),
-        opacity 0.15s ease,
-        transform 0.15s var(--zen-library-easing);
-    max-height: 4000px;
+    display: flex;
+    flex-direction: column;
+    margin-inline-start: var(--zen-folder-indent, 14px);
+    overflow-y: clip;
+}
+
+/* The `display: flex` above is author-origin, so it beats the UA
+   `[hidden] { display: none }` outright — without this the resting
+   collapsed body stays painted and, being pointer-events: none, swallows
+   clicks on its nested folders. */
+.library-workspace-folder-content[hidden] {
+    display: none;
+}
+
+.library-folder-group-start {
+    height: 0;
     overflow: hidden;
+    pointer-events: none;
 }
 
 /* Peek: the active tab stays visible below a collapsed folder header. */
 .library-workspace-folder-peek {
-    margin-inline-start: 16px;
+    margin-inline-start: var(--zen-folder-indent, 14px);
 }
 
+.tab-group-folder-icon,
 .folder-icon {
-    width: 16px;
-    height: 16px;
+    width: 28px;
+    height: 28px;
     display: flex;
     align-items: center;
     justify-content: center;
-    position: relative;
+    position: absolute;
+    left: 5px;
+    top: 50%;
+    translate: 0 -50%;
+    pointer-events: none;
 }
 
 .folder-icon svg {
@@ -531,12 +591,13 @@
     flex-shrink: 0;
     overflow: visible !important;
     filter: contrast(125%);
+    transform: translate(-1px, -1px);
 }
 
 .folder-icon svg image {
     fill-opacity: 0.9;
     -moz-context-properties: fill, fill-opacity;
-    fill: color-mix(in srgb, var(--ws-folder-stroke) 65%, currentColor);
+    fill: color-mix(in srgb, var(--zen-folder-stroke) 50%, currentColor);
     transform: translate(8.5px, 10.5px);
 }
 
@@ -580,20 +641,21 @@
 .library-split-view-group {
     display: flex;
     flex-direction: row;
-    border-radius: 6px;
+    border-radius: var(--border-radius-medium, 6px);
     transition: background-color 0.2s, box-shadow 0.2s;
     position: relative;
     padding: 0 2px;
     min-height: var(--tab-min-height);
+    margin-inline: 2px;
 }
 
 .library-split-view-group:hover {
-    background: var(--ws-tab-hover-color);
+    background: var(--tab-background-color-hover);
 }
 
 .library-split-view-group:has(.selected) {
-    background: var(--ws-tab-selected-color);
-    box-shadow: var(--ws-tab-selected-shadow);
+    background: var(--tab-background-color-selected);
+    box-shadow: var(--tab-box-shadow-selected);
 }
 
 .library-split-view-group .library-workspace-item {
@@ -610,7 +672,7 @@
     content: '';
     width: 1px;
     height: 16px;
-    background-color: var(--ws-text-color);
+    background-color: currentColor;
     position: absolute;
     right: 0;
     top: 50%;
@@ -628,7 +690,10 @@
 .library-workspace-separator-container {
     display: flex;
     align-items: center;
-    margin: 2px 2px 3px;
+    height: 22px;
+    width: 100%;
+    margin: 0;
+    padding: 0;
     position: relative;
 }
 
@@ -702,36 +767,38 @@
 .library-workspace-separator {
     flex: 1;
     height: 1px;
-    background: var(--ws-text-color);
-    opacity: 0.15;
+    background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+    opacity: 1;
+    margin-inline: 4px;
+    padding: 0;
     transition: all 0.2s ease;
 }
 
 .library-workspace-cleanup-button {
-    height: 12px;
-    width: 0;
+    height: auto;
+    width: 16px;
+    min-width: 16px;
     padding: 0;
+    margin-inline: 4px;
     opacity: 0;
+    visibility: collapse;
     border-radius: 4px;
     cursor: pointer;
-    overflow: hidden;
+    overflow: visible;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 2px;
-    color: var(--ws-text-color);
+    color: inherit;
+    fill: currentColor;
     flex-shrink: 0;
-    font-size: 11px;
-    font-weight: 500;
     pointer-events: none;
-    transition: opacity 0.2s ease;
+    -moz-context-properties: fill, fill-opacity;
+    transition: opacity 0.15s ease, visibility 0.15s ease;
 }
 
 .library-workspace-card:hover .library-workspace-cleanup-button {
-    width: 42px;
-    padding: 0 4px;
-    margin-left: 2px;
-    opacity: 0.6;
+    visibility: visible;
+    opacity: 0.5;
     pointer-events: auto;
 }
 
@@ -741,12 +808,23 @@
     box-shadow: none !important;
 }
 
+.library-workspace-cleanup-button:hover:active::before {
+    transform: translateY(2px);
+}
+
 .library-workspace-cleanup-button::before {
     content: "";
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
     background-color: currentColor;
-    mask: url("data:image/svg+xml,%3Csvg fill='none' stroke='currentColor' stroke-width='1.5' height='12' width='12' viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M 2.75,7.75 6,11 9.25,7.75 M 6,1 v 9.75'/%3E%3C/svg%3E") no-repeat center / contain;
+    mask: url("chrome://browser/skin/zen-icons/dart-down.svg") no-repeat center / contain;
+    transition: transform 0.15s ease-in-out;
+}
+
+@media -moz-pref("zen.view.show-clear-tabs-button", false) {
+    .library-workspace-cleanup-button {
+        display: none;
+    }
 }
 
 

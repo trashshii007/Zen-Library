@@ -306,8 +306,14 @@
                     const sidebar = document.createElement("div");
                     sidebar.id = "zen-library-sidebar-container";
 
+                    // Light-DOM slot so Firefox's caption-button CSS (max vs restore
+                    // on sizemode) still applies. The real .titlebar-buttonbox-container
+                    // is assigned here while the Library is open; it is never cloned.
                     const sidebarTop = document.createElement("div");
                     sidebarTop.className = "zen-library-sidebar-top";
+                    const windowButtonSlot = document.createElement("slot");
+                    windowButtonSlot.name = "window-buttons";
+                    sidebarTop.appendChild(windowButtonSlot);
                     sidebar.appendChild(sidebarTop);
 
                     const sidebarItemsContainer = document.createElement("div");
@@ -632,16 +638,17 @@
                     const footer = document.createElement("div");
                     footer.className = "sidebar-button-footer";
 
-                    // Native toolbarbuttons like the PR footer: theme-sized icons, no
-                    // custom mask divs to overflow. Falls back to a plain button if XUL
-                    // creation is unavailable.
-                    const makeFooterButton = (image, title, fallbackIconClass, command) => {
+                    // Native toolbarbuttons like Zen's sidebar action buttons
+                    // (#zen-expand-sidebar-button): list-style-image + context-fill,
+                    // themed by --toolbarbutton-icon-fill. The image URL lives in CSS
+                    // so it matches how Zen declares every other toolbar icon.
+                    // Falls back to a plain button if XUL creation is unavailable.
+                    const makeFooterButton = (title, fallbackIconClass, command) => {
                         let btn = null;
                         try {
                             if (typeof document.createXULElement === "function") {
                                 btn = document.createXULElement("toolbarbutton");
-                                btn.className = "toolbarbutton-1 sidebar-footer-button chromeclass-toolbar-additional";
-                                btn.setAttribute("image", image);
+                                btn.className = "toolbarbutton-1 chromeclass-toolbar-additional zen-sidebar-action-button sidebar-footer-button";
                                 // XUL tooltips read tooltiptext, not title.
                                 btn.setAttribute("tooltiptext", title);
                             }
@@ -663,7 +670,6 @@
                     };
 
                     const exitBtn = makeFooterButton(
-                        "chrome://browser/skin/zen-icons/back.svg",
                         "Exit Library",
                         "back-icon",
                         () => window.gZenLibrary.close()
@@ -672,7 +678,6 @@
                     exitBtn.dataset.id = "exit";
 
                     const donateBtn = makeFooterButton(
-                        "chrome://browser/skin/zen-icons/heart-circle-fill.svg",
                         "Donate to Zen",
                         "donate-icon",
                         () => {
@@ -720,6 +725,10 @@
             if (this._colorSchemeQuery && this._updateColors) {
                 this._colorSchemeQuery.removeEventListener("change", this._updateColors);
             }
+            // The caption cluster is a light-DOM child of this host while adopted.
+            // If the panel is torn down without going through close(), put it back
+            // before the host (and those buttons) leave the document.
+            try { window.gZenLibrary?._restoreWindowButtons(); } catch (e) { }
         }
 
         // getComputedStyle flushes layout, so margins are read once per panel
@@ -1574,11 +1583,14 @@
                 const signed = (this._element?.hasAttribute("right-side") ? -1 : 1) * shift;
                 document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${signed}px`);
             } catch (e) { }
-            // PR window-button switch point: adopt past 0.6, restore below.
-            const pastPoint = progress > 0.6;
-            if (pastPoint && !this._pastWindowButtonPoint) this._adoptWindowButtons();
-            else if (!pastPoint && this._pastWindowButtonPoint) this._restoreWindowButtons();
-            this._pastWindowButtonPoint = pastPoint;
+            // Past 60% the live caption cluster docks in the Library sidebar, and
+            // only when Zen has forced those controls onto the left. Default
+            // Windows placement keeps them in the titlebar, so stealing them would
+            // hide them from the wrong edge. No clone is left behind — that is
+            // what painted a dead restore in the titlebar.
+            const pastPoint = progress > 0.6 && this._windowControlsForcedLeft();
+            if (pastPoint && !this._windowButtonsAdopted) this._adoptWindowButtons();
+            else if (!pastPoint && this._windowButtonsAdopted) this._restoreWindowButtons();
             // URL chrome (pill, nav buttons, standalone search glass) fades on
             // the same doubled-progress curve as the sidebar and flips to
             // hidden only once the spring lands at full open — one driver, so
@@ -1989,7 +2001,6 @@
 
             this._stopSpringAnimation();
             try { this._restoreWindowButtons(); } catch (e) { }
-            this._pastWindowButtonPoint = false;
             try { this._clearUrlbarChrome(); } catch (e) { }
             try { document.getElementById("zen-library-button")?.removeAttribute("library-open"); } catch (e) { }
 
@@ -2136,6 +2147,9 @@
             el.classList.add("closing");
 
             const end = () => {
+                // Caption buttons are a light-DOM child of this host while adopted.
+                // Put them back before the host is dropped, or they leave the document.
+                try { this._restoreWindowButtons(); } catch (e) { }
                 // In-flow layout: drop the element the moment the spring lands so
                 // the browser snaps back with no lingering (even hidden) box.
                 if (el.parentNode) el.remove();
@@ -2152,8 +2166,6 @@
                     try { this._clearUrlbarChrome(); } catch (e) { }
                     try { document.getElementById("zen-library-button")?.removeAttribute("library-open"); } catch (e) { }
 
-                    this._restoreWindowButtons();
-
                     // No extra toolbox fade: the toolbox restores with the layout,
                     // so a second animation would double-fade it.
                     this._isTransitioning = false;
@@ -2163,39 +2175,52 @@
             this._animateOpenProgress(0, end);
         }
 
-        // PR window-button adoption: past 60% open the real traffic lights move
-        // into the library sidebar top; below that (or on teardown) they go home.
-        // Every step is guarded — if Zen's tab manager has no such buttons, this
-        // is a silent no-op.
+        _windowControlsForcedLeft() {
+            try {
+                return Services.prefs.getBoolPref(
+                    "zen.view.experimental-force-window-controls-left",
+                    false
+                );
+            } catch (e) {
+                return false;
+            }
+        }
+
+        // Move the live caption cluster into the Library sidebar. The original
+        // clone-and-leave-behind path painted a second, inert restore in the
+        // titlebar; the real node is assigned to a light-DOM slot so Firefox's
+        // sizemode CSS (max vs restore) still applies.
         _adoptWindowButtons() {
             try {
-                if (this._windowButtonsClone) return;
+                if (this._windowButtonsAdopted) return;
+                if (!this._windowControlsForcedLeft()) return;
                 const real = window.gZenVerticalTabsManager?.actualWindowButtons;
-                const header = this._element?.shadowRoot?.querySelector(".zen-library-sidebar-top");
-                if (!real || !header || !real.parentNode) return;
-                this._windowButtonsClone = real.cloneNode(true);
+                const host = this._element;
+                if (!real || !host || !real.parentNode) return;
                 this._windowButtonsNext = real.nextSibling;
                 this._windowButtonsParent = real.parentNode;
-                header.appendChild(real);
-                if (this._windowButtonsNext) this._windowButtonsParent.insertBefore(this._windowButtonsClone, this._windowButtonsNext);
-                else this._windowButtonsParent.appendChild(this._windowButtonsClone);
+                real.setAttribute("slot", "window-buttons");
+                host.appendChild(real);
+                host.toggleAttribute("window-buttons", true);
+                this._windowButtonsAdopted = true;
             } catch (e) { }
         }
 
         _restoreWindowButtons() {
-            const clone = this._windowButtonsClone;
-            this._windowButtonsClone = null;
+            if (!this._windowButtonsAdopted) return;
+            this._windowButtonsAdopted = false;
             const parent = this._windowButtonsParent;
             const next = this._windowButtonsNext;
             this._windowButtonsParent = null;
             this._windowButtonsNext = null;
-            if (!clone) return;
             try {
                 const real = window.gZenVerticalTabsManager?.actualWindowButtons;
+                const host = this._element;
+                if (host) host.removeAttribute("window-buttons");
                 if (!real) return;
+                real.removeAttribute("slot");
                 if (next && next.parentNode === parent) parent.insertBefore(real, next);
-                else if (parent) parent.appendChild(real);
-                if (clone.parentNode) clone.remove();
+                else if (parent && parent.isConnected) parent.appendChild(real);
             } catch (e) { }
         }
     }
