@@ -64,21 +64,16 @@
     opacity: 0.9;
 }
 
-.library-create-workspace-button span {
-    font-size: 22px;
-    font-weight: 300;
-    line-height: 0;
-    color: inherit;
-    user-select: none;
-    transition: transform 0.2s ease;
+.library-create-workspace-button div {
+    width: 16px;
+    height: 16px;
+    background-color: currentColor;
+    mask: url("chrome://browser/skin/zen-icons/plus.svg") no-repeat center / contain;
     pointer-events: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-top: -1.5px;
+    transition: transform 0.2s ease;
 }
 
-.library-create-workspace-button:active span {
+.library-create-workspace-button:active div {
     transform: scale(0.95);
 }
 
@@ -92,7 +87,7 @@
     max-height: calc(100% - (var(--zen-element-separation, 4px) * 10));
     flex-shrink: 0;
     border-radius: 14px;
-    padding: 14px;
+    padding: 5px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
@@ -126,7 +121,7 @@
 .library-workspace-card-header {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     position: relative;
     z-index: 2;
     padding: 0;
@@ -167,12 +162,17 @@
     height: 16px;
     object-fit: contain;
     background-color: currentColor;
+    opacity: 0.6;
     mask-size: contain;
     mask-repeat: no-repeat;
     mask-position: center;
     -webkit-mask-size: contain;
     -webkit-mask-repeat: no-repeat;
     -webkit-mask-position: center;
+}
+
+.library-workspace-card[active] .library-workspace-icon {
+    opacity: 1;
 }
 
 .library-workspace-icon-text {
@@ -263,7 +263,7 @@
     margin-block: 2px;
     border-radius: 12px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 14px;
     box-sizing: border-box;
     flex-shrink: 0;
     position: relative;
@@ -361,11 +361,22 @@
 .library-workspace-item .item-icon {
     width: 16px;
     height: 16px;
-    border-radius: 3px;
+    border-radius: 4px;
     flex-shrink: 0;
     -moz-context-properties: fill, stroke, fill-opacity;
     fill: currentColor;
     stroke: currentColor;
+    fill-opacity: 0.5;
+}
+
+/* Native missing-icon tile: tabs with no favicon (blank, about:x) render Zen's
+   primary-color placeholder instead of the default globe. Scoped to img —
+   folder icons use a span.item-icon wrapper and must not match. */
+.library-workspace-item img.item-icon:not([src]),
+.library-workspace-item img.item-icon:-moz-broken {
+    content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3C/svg%3E") !important;
+    background: color-mix(in srgb, var(--zen-primary-color) 80%, light-dark(rgb(0, 0, 0), rgb(255, 255, 255)));
+    opacity: 0.5;
 }
 
 .library-workspace-item .item-label {
@@ -446,6 +457,24 @@
     font-weight: 600 !important;
 }
 
+/* The chevron overlays the row gutter instead of taking layout space, so the
+   folder icon and label start at exactly the same x as tab rows
+   (.library-workspace-item is already position: relative). */
+.folder-chevron {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    translate: 0 -50%;
+    width: 8px;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.folder-chevron svg {
+    flex-shrink: 0;
+}
+
 .library-workspace-folder {
     flex-shrink: 0;
     width: 100%;
@@ -482,6 +511,11 @@
     overflow: hidden;
 }
 
+/* Peek: the active tab stays visible below a collapsed folder header. */
+.library-workspace-folder-peek {
+    margin-inline-start: 16px;
+}
+
 .folder-icon {
     width: 16px;
     height: 16px;
@@ -492,13 +526,34 @@
 }
 
 .folder-icon svg {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
     overflow: visible !important;
-    margin-left: -18px;
+    filter: contrast(125%);
 }
 
 .folder-icon svg image {
-    fill: var(--ws-folder-stroke);
+    fill-opacity: 0.9;
     -moz-context-properties: fill, fill-opacity;
+    fill: color-mix(in srgb, var(--ws-folder-stroke) 65%, currentColor);
+    transform: translate(8.5px, 10.5px);
+}
+
+.folder-icon svg .icon {
+    opacity: 1;
+}
+
+.folder-icon svg .dots {
+    opacity: 0;
+}
+
+.folder-icon svg[active="true"] .icon {
+    opacity: 0;
+}
+
+.folder-icon svg[active="true"] .dots {
+    opacity: 1;
 }
 
 .folder-icon svg g,
@@ -508,11 +563,11 @@
 }
 
 .folder-icon svg[state='open'] .back {
-    transform: skewX(16deg) translate(-2px, 3.4px) scale(0.85);
+    transform: skewX(16deg) translate(-4px, 2px) scale(0.85);
 }
 
 .folder-icon svg[state='open'] :is(.front, .dots, .icon) {
-    transform: skewX(-16deg) translate(11.1px, 3.4px) scale(0.85);
+    transform: skewX(-16deg) translate(8px, 2px) scale(0.85);
 }
 
 .empty-icon.spaces-icon {
@@ -796,6 +851,7 @@
 .library-workspace-card-placeholder {
     width: 242px;
     min-width: 242px;
+    box-sizing: border-box;
     height: calc(100% - (var(--zen-element-separation, 4px) * 10));
     background: light-dark(color-mix(in srgb, var(--zen-primary-color, #3b82f6), white 70%),
             color-mix(in srgb, var(--zen-primary-color, #3b82f6), black 40%));

@@ -13,8 +13,6 @@
             return Math.min(total, window.innerWidth * 0.8);
         }
 
-        static getLastWidth() { return this._lastWidth || 340; }
-
         static calculateMediaColumns(width) {
             const sidebar = 160;
             const padding = 36;
@@ -103,7 +101,7 @@
                     if (creationCmd) creationCmd.doCommand();
                 }
             }, [
-                this.el("span", { textContent: "+" })
+                this.el("div")
             ]));
 
             grid.appendChild(fragment);
@@ -144,17 +142,20 @@
 
         // --- Core Rendering Logic Copied from Backup ---
 
-        createFolderIconSVG(iconURL = '', state = 'close', active = false) {
-            const id1 = "nebula-native-grad-0-" + Math.floor(Math.random() * 100000);
-            const id2 = "nebula-native-grad-1-" + Math.floor(Math.random() * 100000);
+        createFolderIconSVG(iconURL = '', state = 'close', active = false, key = '') {
+            // Stable per-folder gradient IDs: identical inputs hit the svg()
+            // cache instead of growing it on every render, and equal IDs can
+            // never collide across folders the way random ones could.
+            const safeKey = String(key || 'shared').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'shared';
+            const id1 = `zlfg-${safeKey}-0`;
+            const id2 = `zlfg-${safeKey}-1`;
 
-            let imageTag = "";
-            if (iconURL) {
-                imageTag = `<image href="${iconURL}" height="10" width="10" transform="translate(9 11)" />`;
-            }
-
+            // Native rawIcon geometry (27-unit viewBox): the image carries no
+            // transform attribute — position comes from CSS, like native.
+            // Fills use the per-card --ws-folder-* vars so folders match
+            // their space; vivid mixes are set where the card is built.
             const svgStr = `
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" state="${state}" active="${active}">
+            <svg width="28" height="28" viewBox="0 0 27 27" fill="none" xmlns="http://www.w3.org/2000/svg" state="${state}" active="${active}">
                 <defs>
                     <linearGradient gradientUnits="userSpaceOnUse" x1="14" y1="5.625" x2="14" y2="22.375" id="${id1}">
                         <stop offset="0" style="stop-color: rgb(255, 255, 255)"/>
@@ -169,8 +170,8 @@
                 <path class="back" d="M8 5.625H11.9473C12.4866 5.625 13.0105 5.80861 13.4316 6.14551L14.2881 6.83105C14.9308 7.34508 15.7298 7.625 16.5527 7.625H20C21.3117 7.625 22.375 8.68832 22.375 10V20C22.375 21.3117 21.3117 22.375 20 22.375H8C6.68832 22.375 5.625 21.3117 5.625 20V8C5.625 6.68832 6.68832 5.625 8 5.625Z" style="stroke-width: 1.5px; stroke: var(--ws-folder-stroke); fill: url(#${id1}); fill-opacity: 0.1;" />
                 <rect class="front" x="5.625" y="9.625" width="16.75" height="12.75" rx="2.375" style="fill: var(--ws-folder-front);" />
                 <rect class="front" x="5.625" y="9.625" width="16.75" height="12.75" rx="2.375" style="stroke-width: 1.5px; stroke: var(--ws-folder-stroke); fill: url(#${id2}); fill-opacity: 0.1;" />
-                <g class="icon" style="fill: var(--ws-folder-stroke, currentColor);">
-                     ${imageTag}
+                <g class="icon">
+                     <image href="" height="11" width="11" />
                 </g>
                 <g class="dots" style="fill: var(--ws-folder-stroke);">
                     <ellipse cx="10" cy="16" rx="1.25" ry="1.25"/>
@@ -178,7 +179,11 @@
                     <ellipse cx="18" cy="16" rx="1.25" ry="1.25"/>
                 </g>
             </svg>`;
-            return this.svg(svgStr);
+            const node = this.svg(svgStr);
+            // setAttribute, not string interpolation: a quote in a stored icon
+            // URL must never be able to break out of the SVG markup.
+            if (node && iconURL) node.querySelector("image")?.setAttribute("href", iconURL);
+            return node;
         }
 
         createWorkspaceCard(ws) {
@@ -203,6 +208,14 @@
                 card.style.setProperty("--ws-text-color", tColor);
                 card.style.colorScheme = themeData.isDarkMode ? "dark" : "light";
 
+                // Folder branch follows the card's actual lightness, read from
+                // its text color: light text means a dark card and vice versa.
+                // The workspace isDarkMode flag has disagreed with the painted
+                // card (dark folders on light cards), so it is not used here.
+                const toolbarRGB = themeData.toolbarColor;
+                const textLuminance = (0.299 * toolbarRGB[0] + 0.587 * toolbarRGB[1] + 0.114 * toolbarRGB[2]) / 255;
+                const darkCard = textLuminance > 0.6;
+
                 // Native Zen Tab Highlights
                 if (themeData.isDarkMode) {
                     card.style.setProperty("--ws-tab-selected-color", "rgba(255, 255, 255, 0.12)");
@@ -213,14 +226,16 @@
                 }
                 card.style.setProperty("--ws-tab-hover-color", `color-mix(in srgb, ${tColor}, transparent 92.5%)`);
 
-                if (themeData.isDarkMode) {
-                    card.style.setProperty("--ws-folder-front", `color-mix(in srgb, ${pColor}, black 40%)`);
-                    card.style.setProperty("--ws-folder-behind", `color-mix(in srgb, ${pColor} 60%, #c1c1c1)`);
-                    card.style.setProperty("--ws-folder-stroke", `color-mix(in srgb, ${pColor} 15%, #ebebeb)`);
+                // Vivid space tint: folders carry the space's own primary color
+                // at high saturation so they read as part of the card.
+                if (darkCard) {
+                    card.style.setProperty("--ws-folder-front", `color-mix(in srgb, ${pColor} 78%, black)`);
+                    card.style.setProperty("--ws-folder-behind", `color-mix(in srgb, ${pColor} 65%, #c1c1c1)`);
+                    card.style.setProperty("--ws-folder-stroke", `color-mix(in srgb, ${pColor} 35%, #ebebeb)`);
                 } else {
-                    card.style.setProperty("--ws-folder-front", `color-mix(in srgb, ${pColor}, white 70%)`);
-                    card.style.setProperty("--ws-folder-behind", `color-mix(in srgb, ${pColor} 60%, gray)`);
-                    card.style.setProperty("--ws-folder-stroke", `color-mix(in srgb, ${pColor} 50%, black)`);
+                    card.style.setProperty("--ws-folder-front", `color-mix(in srgb, ${pColor} 78%, white)`);
+                    card.style.setProperty("--ws-folder-behind", `color-mix(in srgb, ${pColor} 65%, gray)`);
+                    card.style.setProperty("--ws-folder-stroke", `color-mix(in srgb, ${pColor} 65%, black)`);
                 }
 
                 if (themeData.isDarkMode) card.classList.add("dark");
@@ -339,23 +354,36 @@
                     card.setAttribute("dragged", "true");
                     grid.setAttribute("dragging-workspace", "true");
 
-                    const placeholder = this.el("div", { className: "library-workspace-card-placeholder entering" });
+                    const placeholder = this.el("div", { className: "library-workspace-card-placeholder" });
                     grid.insertBefore(placeholder, card);
 
                     card.style.width = preDragRect.width + "px";
                     card.style.height = preDragRect.height + "px";
 
-                    const gridRectAtStart = grid.getBoundingClientRect();
                     card.style.left = preDragRect.left + "px";
                     card.style.top = preDragRect.top + "px";
 
+                    // position:fixed resolves against the nearest transformed ancestor
+                    // (the library host carries a translateX even when fully open),
+                    // not the viewport, so re-measure and shift into the card's own
+                    // coordinate space. Without this the card jumps right of the grab point.
+                    const fixedRect = card.getBoundingClientRect();
+                    const coordDX = fixedRect.left - preDragRect.left;
+                    const coordDY = fixedRect.top - preDragRect.top;
+                    const originLeft = preDragRect.left - coordDX;
+                    const originTop = preDragRect.top - coordDY;
+                    if (coordDX || coordDY) {
+                        card.style.left = originLeft + "px";
+                        card.style.top = originTop + "px";
+                    }
+
                     const initialOffsetX = e.clientX - preDragRect.left;
-                    const lockedY = preDragRect.top;
+                    const lockedY = originTop;
 
                     const originalIndex = Array.from(grid.children).indexOf(placeholder);
 
-                    let currentX = preDragRect.left;
-                    let targetX = preDragRect.left;
+                    let currentX = originLeft;
+                    let targetX = originLeft;
                     let isDragging = true;
                     let mouseX = e.clientX;
 
@@ -423,7 +451,7 @@
 
                     const onMouseMove = (moveEvent) => {
                         mouseX = moveEvent.clientX;
-                        targetX = mouseX - initialOffsetX;
+                        targetX = mouseX - initialOffsetX - coordDX;
 
                         const gridRect = grid.getBoundingClientRect();
                         const scrollLeft = grid.scrollLeft;
@@ -599,7 +627,10 @@
                     if (this._suppressFolderToggle) return;
                     const wantCollapsed = !(folder.hasAttribute("zen-folder-collapsed") || folder.collapsed);
                     this._syncNativeFolderCollapsed(folder, wantCollapsed);
-                    const newlyExpanded = !(folder.hasAttribute("zen-folder-collapsed") || folder.collapsed);
+                    // Authoritative: derive from intent, not by re-reading the
+                    // native property, which can still report the pre-toggle
+                    // value while Zen's collapse runs.
+                    const newlyExpanded = !wantCollapsed;
                     this._folderExpansion.set(folderId, newlyExpanded);
                     folderEl.classList.toggle("collapsed", !newlyExpanded);
 
@@ -612,6 +643,16 @@
                     const iconSvg = headerEl.querySelector(".folder-icon svg");
                     if (iconSvg) {
                         iconSvg.setAttribute("state", newlyExpanded ? "open" : "close");
+                        // Peek state changes with the toggle too: a collapsed
+                        // folder holding the active tab shows dots.
+                        iconSvg.setAttribute("active", String(hasActive && !newlyExpanded));
+                    }
+
+                    // Expanding removes the peek clone; collapsing rebuilds it.
+                    if (newlyExpanded) {
+                        folderEl.querySelector(":scope > .library-workspace-folder-peek")?.remove();
+                    } else {
+                        this._renderFolderPeek(folderEl, folder, wsId);
                     }
                 }
             });
@@ -619,7 +660,7 @@
             const rot = isExpanded ? '0deg' : '-90deg';
             const chevronSvg = this.svg(`<svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" style="transform: rotate(${rot}); transition: transform 0.2s;"><path d="M7 10l5 5 5-5z"/></svg>`);
 
-            const folderIconSvg = this.createFolderIconSVG(folder.iconURL, isExpanded ? "open" : "close", hasActive && !isExpanded);
+            const folderIconSvg = this.createFolderIconSVG(folder.iconURL, isExpanded ? "open" : "close", hasActive && !isExpanded, folderId);
 
             headerEl.appendChild(this.el("span", { className: "folder-chevron" }, [chevronSvg]));
 
@@ -642,8 +683,23 @@
             children.forEach(child => this.renderItemRecursive(child, contentEl, wsId));
 
             folderEl.appendChild(contentEl);
+            this._renderFolderPeek(folderEl, folder, wsId);
             this._bindFolderDropTarget(folderEl, headerEl, contentEl, folder, wsId);
             container.appendChild(folderEl);
+        }
+
+        // A collapsed folder holding the active tab peeks that tab below its
+        // header. The content list stays collapsed-hidden; the peek is a
+        // separate visible clone built with the normal tab renderer.
+        _renderFolderPeek(folderEl, folder, wsId) {
+            folderEl.querySelector(":scope > .library-workspace-folder-peek")?.remove();
+            const items = folder.allItemsRecursive || folder.tabs || [];
+            const isCollapsed = folder.hasAttribute("zen-folder-collapsed") || folder.collapsed;
+            const activeTab = isCollapsed && items.find(t => t.selected && window.gBrowser?.isTab?.(t));
+            if (!activeTab) return;
+            const peekEl = this.el("div", { className: "library-workspace-folder-peek" });
+            this.renderTab(activeTab, peekEl, wsId);
+            folderEl.appendChild(peekEl);
         }
 
         renderTab(tab, container, wsId) {
@@ -663,7 +719,7 @@
                     window.gZenLibrary.close();
                 }
             }, [
-                this.el("img", { src: iconSrc, className: "item-icon", onerror: "this.src='chrome://global/skin/icons/defaultFavicon.svg'" }),
+                this.el("img", { src: iconSrc || undefined, className: "item-icon", onerror: (e) => e.currentTarget.removeAttribute("src") }),
                 this.el("span", { className: "item-label", textContent: tab.label })
             ]);
             itemEl.draggable = true;
@@ -712,23 +768,12 @@
         // for loaded tabs, so an unloaded pinned tab reports its old favicon there.
         // The favicon lives only in the `image` attribute — there is no `tab.image`
         // property in Gecko, which is why every tab used to fall through to the default.
+        // No default favicon here: tabs without an icon (blank, about:x) get Zen's
+        // native missing-icon tile via the .item-icon:not([src]) style instead.
         getTabIcon(tab) {
             return tab.zenStaticIcon ||
                 tab.getAttribute?.("image") ||
-                "chrome://global/skin/icons/defaultFavicon.svg";
-        }
-
-        getWorkspaceIcon(ws) {
-            try {
-                if (window.gZenWorkspaces?.getWorkspaceIcon) {
-                    return window.gZenWorkspaces.getWorkspaceIcon(ws);
-                }
-            } catch (e) { }
-
-            const icon = String(ws?.icon || "").trim();
-            if (icon) return icon;
-            const name = String(ws?.name || "").trim();
-            return name ? name[0].toUpperCase() : "";
+                "";
         }
 
         getWorkspaceProfileId(wsId) {
