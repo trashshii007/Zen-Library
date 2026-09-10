@@ -273,6 +273,55 @@
     mask-image: url("chrome://browser/skin/history.svg");
 }
 
+.history-row-actions {
+    display: none;
+    gap: 4px;
+}
+
+.library-list-item:hover .history-row-actions,
+.library-list-item:focus-within .history-row-actions,
+.library-list-item[menu-open] .history-row-actions {
+    display: flex;
+}
+
+.history-row-action {
+    width: 28px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: var(--border-radius-medium, 8px);
+    background: transparent;
+    color: inherit;
+    opacity: 0.8;
+    cursor: pointer;
+}
+
+.history-row-action:hover {
+    opacity: 1;
+    background: var(--tab-hover-background-color, color-mix(in srgb, currentColor 12%, transparent));
+}
+
+.history-row-action::before {
+    content: "";
+    display: block;
+    width: 16px;
+    height: 16px;
+    margin: 6px;
+    background-color: currentColor;
+    mask-size: contain;
+    mask-repeat: no-repeat;
+    mask-position: center;
+}
+
+.history-row-remove::before {
+    mask-image: url("chrome://global/skin/icons/delete.svg");
+}
+
+.history-row-reopen::before {
+    mask-image: url("chrome://browser/skin/zen-icons/reload.svg");
+}
+
 @media (prefers-color-scheme: dark) {
     .history-pane .item-icon[style*="chrome://"],
     .history-pane .empty-icon.history-icon {

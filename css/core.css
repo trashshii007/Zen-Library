@@ -60,38 +60,55 @@
    come from whatever theme is active, so this button is styled by a theme's generic
    toolbar-button rules instead of carrying one theme's look baked into the mod. */
 #zen-library-button {
-  list-style-image: url("chrome://sine/content/zen-library/resources/library.svg");
+  --zen-library-sprite-size: 18px;
+  list-style-image: none !important;
+  position: relative;
 }
 
-/* PR animated icon: opening swaps in the forward-playing variant, closing
-   swaps back to the backward-playing one. Each swap replays its 0.4s
-   star/triangle/circle burst, drawn with context-fill like every other
-   toolbar icon. */
-:root[zen-library-open] #zen-library-button,
-:root[zen-library-open-compact] #zen-library-button,
-#zen-library-button[library-open] {
-  list-style-image: url("chrome://sine/content/zen-library/resources/library-active.svg");
+#zen-library-button::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--zen-library-sprite-size);
+  height: var(--zen-library-sprite-size);
+  background-image: url("chrome://sine/content/zen-library/resources/library-sprite.svg");
+  background-repeat: no-repeat;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  -moz-context-properties: fill, fill-opacity, stroke;
+  fill: var(--toolbarbutton-icon-fill, currentColor);
+  fill-opacity: var(--toolbarbutton-icon-fill-opacity, 1);
+  stroke: var(--zen-colors-primary, currentColor);
 }
 
-/* Button-level pop so the open transition reads even at 16px, where the
-   icon-internal burst is easy to miss. Runs once when the open attribute
-   lands; the close leg is covered by the backward-playing SVG. */
-#zen-library-button[library-open] > .toolbarbutton-icon {
-  transform-origin: center;
-  animation: zenLibraryBtnPop 0.45s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-@keyframes zenLibraryBtnPop {
-  0% {
-    transform: scale(0.7) rotate(-30deg);
+@media (prefers-reduced-motion: no-preference) {
+  #zen-library-button::before {
+    animation: zen-library-sprite-unhover 0.3s steps(36, jump-none);
   }
 
-  60% {
-    transform: scale(1.12) rotate(8deg);
+  #zen-library-button:hover::before {
+    animation: zen-library-sprite-hover 0.35s steps(36, jump-none) forwards;
+  }
+}
+
+@keyframes zen-library-sprite-hover {
+  from {
+    background-position-x: 0%;
   }
 
-  100% {
-    transform: scale(1) rotate(0deg);
+  to {
+    background-position-x: 100%;
+  }
+}
+
+@keyframes zen-library-sprite-unhover {
+  from {
+    background-position-x: 100%;
+  }
+
+  to {
+    background-position-x: 0%;
   }
 }
 
