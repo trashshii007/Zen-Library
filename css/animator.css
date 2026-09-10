@@ -1,29 +1,16 @@
-:root[zen-library-open="true"] #navigator-toolbox,
-:root[zen-library-open-compact="true"] #navigator-toolbox,
-:root[zen-library-open="true"] #zen-sidebar-splitter,
-:root[zen-library-open-compact="true"] #zen-sidebar-splitter {
-  display: none !important;
-}
+/* PR layout: the toolbox stays in place and fades/scales out via the progress
+   spring while the overlay slides over it — never display:none. */
 :root[zen-library-open="true"] #browser,
 :root[zen-library-open-compact="true"] #browser {
   overflow: hidden !important;
 }
-:root[zen-library-open="true"] #zen-appcontent-wrapper,
-:root[zen-library-open-compact="true"] #zen-appcontent-wrapper,
-:root[zen-library-open="true"] #urlbar:not([open]),
-:root[zen-library-open-compact="true"] #urlbar:not([open]) {
-  transform: translateX(var(--zen-library-offset, 0px)) !important;
-  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-  width: 100% !important;
-}
-:root[zen-right-side="true"][zen-library-open="true"] #zen-appcontent-wrapper,
-:root[zen-right-side="true"][zen-library-open-compact="true"]
-  #zen-appcontent-wrapper,
-:root[zen-right-side="true"][zen-library-open="true"] #urlbar:not([open]),
-:root[zen-right-side="true"][zen-library-open-compact="true"]
-  #urlbar:not([open]) {
-  transform: translateX(calc(-1 * var(--zen-library-offset, 0px))) !important;
-}
+/* PR motion: the content shift is recomputed from live geometry on every
+   spring frame (#zen-library-global-style) — no static offset, no CSS
+   transition here, or the two drivers fight and the page overlaps the panel.
+   The urlbar rides the same shift so it stays glued to the content. */
+/* Web-content motion is owned by the progress spring
+   (#zen-library-global-style): no static offset or transition here, so open
+   and close stay in sync with the panel instead of racing it. */
 :root[zen-library-dragging="true"] #zen-tabbox-wrapper {
   transform: translateX(calc(-1 * var(--zen-library-offset, 0px))) !important;
   transition-delay: 0.1s !important;
@@ -41,9 +28,6 @@
 :root[zen-right-side="true"][zen-library-dragging="true"] #zen-library-container {
   translate: var(--zen-library-offset, 0px) 0;
 }
-#zen-tabbox-wrapper {
-  transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
-}
 .browserSidebarContainer.zen-glance-overlay {
   translate: calc(-1 * var(--zen-library-offset, 0px)) 0;
   transition: translate 0.15s var(--zen-library-easing);
@@ -58,19 +42,7 @@
 zen-library,
 #zen-library-container {
   opacity: 1;
-  transition: opacity 0.12s ease, translate 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 :root:has(.zen-glance-overlay:not([fade-out="true"])) #zen-library-container {
   opacity: 0.4 !important;
-}
-:root.zen-toolbox-fading-in #navigator-toolbox {
-  animation: zen-fade-in 0.15s cubic-bezier(0.25, 1, 0.5, 1) !important;
-}
-@keyframes zen-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
 }

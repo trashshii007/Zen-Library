@@ -2,21 +2,21 @@
 
 (function () {
     class ZenLibrarySpaces {
-        static CARD_WIDTH = 224;
-        static CARD_GAP = 16;
+        static CARD_WIDTH = 242;
+        static CARD_GAP = 24;
 
         static getWorkspaces() { return window.gZenWorkspaces ? window.gZenWorkspaces.getWorkspaces() : []; }
 
         static calculatePanelWidth(count) {
-            // sidebar (90) + grid padding (40) + cards + gaps + create-button (36 + 2 margin)
-            const total = 90 + 40 + (count * this.CARD_WIDTH) + (count * this.CARD_GAP) + 38;
+            // sidebar (160) + grid padding (40) + cards + gaps + create-button (36 + 2 margin)
+            const total = 160 + 50 + (count * this.CARD_WIDTH) + (count * this.CARD_GAP) + 38;
             return Math.min(total, window.innerWidth * 0.8);
         }
 
         static getLastWidth() { return this._lastWidth || 340; }
 
         static calculateMediaColumns(width) {
-            const sidebar = 90;
+            const sidebar = 160;
             const padding = 36;
             const colWidth = 210;
             const gap = 16;
@@ -27,7 +27,7 @@
         }
 
         static calculateMediaWidth(count) {
-            const sidebar = 90;
+            const sidebar = 160;
             const padding = 36;
             const colWidth = 210;
             const gap = 16;
@@ -192,6 +192,7 @@
 
                 const card = this.el("div", { className: "library-workspace-card" });
                 card.setAttribute("workspace-id", ws.uuid);
+                card.toggleAttribute("active", window.gZenWorkspaces?.activeWorkspace === ws.uuid);
                 card.style.setProperty("--ws-gradient", themeData.gradient);
                 card.style.setProperty("--ws-grain", themeData.grain);
 
@@ -224,20 +225,27 @@
 
                 if (themeData.isDarkMode) card.classList.add("dark");
 
+                const hasNativeIcon = window.gZenWorkspaces?.workspaceHasIcon ?
+                    window.gZenWorkspaces.workspaceHasIcon(ws) :
+                    !!String(ws.icon || "").trim();
+                const workspaceIcon = hasNativeIcon && window.gZenWorkspaces?.getWorkspaceIcon ?
+                    window.gZenWorkspaces.getWorkspaceIcon(ws) :
+                    String(ws.icon || "").trim();
+
                 let iconEl;
-                if (ws.icon && (ws.icon.includes("/") || ws.icon.startsWith("data:"))) {
+                if (workspaceIcon && (workspaceIcon.includes("/") || workspaceIcon.startsWith("data:"))) {
                     // [audit] SEC-3 — ws.icon is stored workspace data and this string is
                     // assigned to cssText by el(), so an unescaped quote in it injected CSS
                     // declarations into privileged chrome rather than merely breaking a mask.
                     iconEl = this.el("div", {
                         className: "library-workspace-icon",
-                        style: `mask-image: url("${window.ZenLibraryUtil.cssUrl(ws.icon)}");`
+                        style: `mask-image: url("${window.ZenLibraryUtil.cssUrl(workspaceIcon)}");`
                     });
-                } else if (ws.icon && ws.icon.trim().length > 0) {
-                    iconEl = this.el("span", { textContent: ws.icon, className: "library-workspace-icon-text" });
+                } else if (workspaceIcon) {
+                    iconEl = this.el("span", { textContent: workspaceIcon, className: "library-workspace-icon-text" });
                 } else {
                     iconEl = this.el("span", {
-                        textContent: this.getWorkspaceIcon(ws),
+                        textContent: "",
                         className: "library-workspace-icon-text fallback"
                     });
                 }
@@ -245,6 +253,7 @@
                 const iconContainer = this.el("div", {
                     className: "library-workspace-icon-container"
                 }, [iconEl]);
+                iconContainer.toggleAttribute("no-icon", !workspaceIcon);
                 iconContainer.addEventListener("dblclick", (e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -261,13 +270,19 @@
                     this.editWorkspaceTheme(ws, e);
                 });
 
-                const menuBtn = this.el("div", {
-                    className: "library-workspace-menu-button",
-                    title: "Space Options"
-                }, [this.el("div")]);
+                const menuBtn = document.createXULElement("toolbarbutton");
+                menuBtn.className = "library-workspace-menu-button";
+                menuBtn.setAttribute("title", "Space Options");
+                menuBtn.setAttribute("zen-workspace-id", ws.uuid);
+                menuBtn.appendChild(this.el("div"));
 
                 menuBtn.addEventListener("click", (e) => {
                     e.stopPropagation();
+                    const nativePopup = document.getElementById("zenWorkspaceMoreActions");
+                    if (nativePopup) {
+                        nativePopup.openPopup(menuBtn, "after_end", 0, 4, true, false, e);
+                        return;
+                    }
                     this.showWorkspaceMenu(e, ws);
                 });
 
@@ -331,12 +346,10 @@
                     card.style.height = preDragRect.height + "px";
 
                     const gridRectAtStart = grid.getBoundingClientRect();
-                    card.style.left = (preDragRect.left - gridRectAtStart.left) + "px";
-                    card.style.top = (preDragRect.top - gridRectAtStart.top) + "px";
+                    card.style.left = preDragRect.left + "px";
+                    card.style.top = preDragRect.top + "px";
 
-                    void card.offsetWidth;
-                    const scaledRect = card.getBoundingClientRect();
-                    const initialOffsetX = e.clientX - scaledRect.left;
+                    const initialOffsetX = e.clientX - preDragRect.left;
                     const lockedY = preDragRect.top;
 
                     const originalIndex = Array.from(grid.children).indexOf(placeholder);
@@ -388,12 +401,13 @@
 
                     const moveLoop = () => {
                         if (!isDragging) return;
-                        const currentGridRect = grid.getBoundingClientRect();
                         currentX += (targetX - currentX) * 0.42;
                         if (Math.abs(targetX - currentX) < 0.5) currentX = targetX;
 
-                        card.style.left = (currentX - currentGridRect.left) + "px";
-                        card.style.top = (lockedY - currentGridRect.top) + "px";
+                        card.style.left = currentX + "px";
+                        card.style.top = lockedY + "px";
+
+                        const currentGridRect = grid.getBoundingClientRect();
 
                         const scrollThreshold = 150;
                         if (mouseX < currentGridRect.left + scrollThreshold) {
@@ -413,7 +427,7 @@
 
                         const gridRect = grid.getBoundingClientRect();
                         const scrollLeft = grid.scrollLeft;
-                        const paddingLeft = 16;
+                        const paddingLeft = 25;
                         const cardWidthPlusGap = ZenLibrarySpaces.CARD_WIDTH + ZenLibrarySpaces.CARD_GAP;
 
                         const localX = mouseX - gridRect.left + scrollLeft - paddingLeft;
@@ -1915,11 +1929,17 @@
             unloadItem.id = "zen-library-workspace-menu-unload";
             unloadItem.setAttribute("label", "Unload Space");
 
+            const nativeItem = document.createXULElement("menuitem");
+            nativeItem.id = "zen-library-workspace-menu-native-actions";
+            nativeItem.setAttribute("label", "More Space Actions");
+
             popup.appendChild(renameItem);
             popup.appendChild(iconItem);
             popup.appendChild(themeItem);
             popup.appendChild(document.createXULElement("menuseparator"));
             popup.appendChild(unloadItem);
+            popup.appendChild(document.createXULElement("menuseparator"));
+            popup.appendChild(nativeItem);
             document.getElementById("mainPopupSet")?.appendChild(popup) || document.body.appendChild(popup);
         }
 
@@ -1932,21 +1952,31 @@
             const iconItem = document.getElementById("zen-library-workspace-menu-icon");
             const themeItem = document.getElementById("zen-library-workspace-menu-theme");
             const unloadItem = document.getElementById("zen-library-workspace-menu-unload");
+            const nativeItem = document.getElementById("zen-library-workspace-menu-native-actions");
 
             const newRename = renameItem.cloneNode(true);
             const newIcon = iconItem.cloneNode(true);
             const newTheme = themeItem.cloneNode(true);
             const newUnload = unloadItem.cloneNode(true);
+            const newNative = nativeItem.cloneNode(true);
 
             renameItem.replaceWith(newRename);
             iconItem.replaceWith(newIcon);
             themeItem.replaceWith(newTheme);
             unloadItem.replaceWith(newUnload);
+            nativeItem.replaceWith(newNative);
 
             newRename.addEventListener("command", () => this.renameWorkspace(ws));
             newIcon.addEventListener("command", () => this.changeWorkspaceIcon(ws, this.getWorkspaceIconAnchor(ws) || button));
             newTheme.addEventListener("command", (event) => this.editWorkspaceTheme(ws, event));
             newUnload.addEventListener("command", () => this.unloadWorkspace(ws));
+            newNative.hidden = !document.getElementById("zenWorkspaceMoreActions");
+            newNative.addEventListener("command", () => {
+                const nativePopup = document.getElementById("zenWorkspaceMoreActions");
+                if (!nativePopup) return;
+                button.setAttribute("zen-workspace-id", ws.uuid);
+                nativePopup.openPopup(button, "after_end", 0, 4, true, false);
+            });
 
             popup.openPopup(button, "after_end", 0, 4, true, false);
         }
@@ -2017,17 +2047,37 @@
         changeWorkspaceIcon(ws, anchor) {
             if (!window.gZenEmojiPicker) return;
 
-            window.gZenEmojiPicker.open(anchor).then(async (emoji) => {
+            let selectedViaCallback = false;
+            const applyIcon = async (emoji) => {
+                selectedViaCallback = true;
                 // If emoji is null or empty, it means "delete icon" was pressed
                 ws.icon = emoji || "";
                 if (window.gZenWorkspaces?.saveWorkspace) {
                     await window.gZenWorkspaces.saveWorkspace(ws);
                     if (this.library.update) this.library.update();
                 }
-            }).catch(() => { }); // Prevent console errors on picker closing
+            };
+
+            try {
+                const result = window.gZenEmojiPicker.open(anchor, {
+                    allowNone: window.gZenWorkspaces?.workspaceHasIcon?.(ws),
+                    closeOnSelect: false,
+                    onSelect: applyIcon
+                });
+                result?.then?.((emoji) => {
+                    if (!selectedViaCallback) applyIcon(emoji);
+                }).catch(() => { });
+            } catch (e) { }
         }
 
         async editWorkspaceTheme(ws, e) {
+            if (window.gZenThemePicker?.openThemePickerForWorkspace) {
+                try {
+                    window.gZenThemePicker.openThemePickerForWorkspace(ws, e?.currentTarget || e?.target, e);
+                    return;
+                } catch (error) { }
+            }
+
             // Close the library first to return focus to the main window
             if (window.gZenLibrary?.close) {
                 window.gZenLibrary.close();

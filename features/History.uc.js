@@ -16,6 +16,10 @@
             this._isFetching = false;
             this._initialized = false; // Track if data has been pre-fetched
             this._unsubscribe = null;  // [audit] BUG-2 — store subscription, released in destroy()
+            this._activeWhenFilter = "all";
+            this._activeSort = "date";
+            this._filtersOpen = false;
+            this._searchDebounce = null;
         }
 
         /**
@@ -52,13 +56,225 @@
 
         get el() { return this.library.el.bind(this.library); }
 
+        renderHeaderControls() {
+            const top = this.el("div", { className: "zen-library-search-top" });
+            top.toggleAttribute("open", this._filtersOpen);
+
+            const searchInput = this.el("input", {
+                type: "search",
+                placeholder: "Search History…",
+                value: this._searchTerm,
+                oninput: (event) => this._onSearchInput(event)
+            });
+
+            const searchHeader = this.el("div", { className: "zen-library-search-header" }, [
+                this.el("div", { className: "zen-library-search-box" }, [
+                    this.el("img", {
+                        src: "chrome://browser/skin/zen-icons/search-glass.svg",
+                        alt: ""
+                    }),
+                    searchInput
+                ]),
+                this.el("button", {
+                    className: "zen-library-filter-button",
+                    onclick: (event) => {
+                        event.preventDefault();
+                        this._filtersOpen = true;
+                        this.library.update(true);
+                    }
+                }, [
+                    this.el("img", {
+                        src: "chrome://browser/skin/zen-icons/sliders.svg",
+                        alt: ""
+                    }),
+                    this.el("span", { textContent: "Filter" })
+                ])
+            ]);
+            if (this._filtersOpen) searchHeader.setAttribute("inert", "");
+
+            const filterHeader = this.el("div", { className: "zen-library-filter-header" }, [
+                this.el("h2", { textContent: "Filter History…" }),
+                this.el("button", {
+                    className: "zen-library-filter-done",
+                    textContent: "Done",
+                    onclick: (event) => {
+                        event.preventDefault();
+                        this._filtersOpen = false;
+                        this.library.update(true);
+                    }
+                })
+            ]);
+            if (!this._filtersOpen) filterHeader.setAttribute("inert", "");
+
+            const panelInner = this.el("div", { className: "zen-library-filter-panel-inner" }, [
+                this._renderFilterGroup("when", "When was it visited?", [
+                    ["today", "Today"],
+                    ["week", "This Week"],
+                    ["month", "This Month"]
+                ]),
+                this._renderFilterGroup("sort", "Sort by", [
+                    ["date", "By Date"],
+                    ["site", "By Site"],
+                    ["mostvisited", "By Most Visited"],
+                    ["lastvisited", "By Last Visited"]
+                ]),
+                this.el("div", { className: "zen-library-filter-divider" })
+            ]);
+            if (!this._filtersOpen) panelInner.setAttribute("inert", "");
+
+            const filterPanel = this.el("div", { className: "zen-library-filter-panel" }, [panelInner]);
+            if (this._filtersOpen) {
+                requestAnimationFrame(() => {
+                    const height = `${panelInner.scrollHeight + 8}px`;
+                    top.style.setProperty("--zen-library-filter-height", height);
+                    // The shifted list (.library-content) is a sibling of the header, so it
+                    // cannot inherit a var set on `top`. Mirror it onto the shadow host like
+                    // the PR mirrors it onto the section root.
+                    try {
+                        top.getRootNode()?.host?.style?.setProperty("--zen-library-filter-height", height);
+                    } catch (e) { }
+                });
+            } else {
+                try {
+                    top.getRootNode()?.host?.style?.setProperty("--zen-library-filter-height", "0px");
+                } catch (e) { }
+            }
+
+            top.appendChild(searchHeader);
+            top.appendChild(filterHeader);
+            top.appendChild(filterPanel);
+            return top;
+        }
+
+        renderFilterBar() {
+            return this.renderHeaderControls();
+        }
+
+        _renderFilterGroup(groupId, title, options) {
+            return this.el("div", { className: "zen-library-filter-group" }, [
+                this.el("h3", { textContent: title }),
+                this.el("div", { className: "zen-library-filter-options" },
+                    options.map(([id, label]) => this._renderFilterChip(groupId, id, label))
+                )
+            ]);
+        }
+
+        _renderFilterChip(groupId, id, label) {
+            const chip = this.el("button", {
+                className: "zen-library-filter-chip",
+                onclick: (event) => {
+                    event.preventDefault();
+                    if (groupId === "when") this._toggleWhenFilter(id);
+                    else this._setSort(id);
+                }
+            }, [this.el("span", { textContent: label })]);
+            const active = groupId === "when" ? this._activeWhenFilter === id : this._activeSort === id;
+            chip.toggleAttribute("active", active);
+            return chip;
+        }
+
+        _onSearchInput(event) {
+            const value = event.target.value;
+            if (this._searchDebounce) clearTimeout(this._searchDebounce);
+            this._searchDebounce = setTimeout(() => {
+                this._searchDebounce = null;
+                const query = value.trim();
+                if (query === this._searchTerm) return;
+                this._searchTerm = query;
+                this.renderBatch(true);
+            }, 250);
+        }
+
+        _toggleWhenFilter(id) {
+            this._activeWhenFilter = this._activeWhenFilter === id ? "all" : id;
+            this.library.update(true);
+            this.renderBatch(true);
+        }
+
+        _setSort(id) {
+            const next = ["date", "site", "mostvisited", "lastvisited"].includes(id) ? id : "date";
+            if (this._activeSort === next) return;
+            this._activeSort = next;
+            this.library.update(true);
+            this.renderBatch(true);
+        }
+
+        _historyTimeMs(item) {
+            return (Number(item?.time) || 0) / 1000;
+        }
+
+        _whenCutoff() {
+            const now = new Date();
+            if (this._activeWhenFilter === "today") {
+                now.setHours(0, 0, 0, 0);
+                return now.getTime();
+            }
+            if (this._activeWhenFilter === "week") {
+                return Date.now() - 7 * 24 * 60 * 60 * 1000;
+            }
+            if (this._activeWhenFilter === "month") {
+                return Date.now() - 30 * 24 * 60 * 60 * 1000;
+            }
+            return 0;
+        }
+
+        _hostLabel(uri) {
+            try {
+                const url = new URL(uri);
+                return url.hostname.replace(/^www\./i, "") || "Other";
+            } catch (e) {
+                return "Other";
+            }
+        }
+
+        _filteredAndSortedItems() {
+            const term = this._searchTerm.trim().toLowerCase();
+            const cutoff = this._whenCutoff();
+            const visitCounts = new Map();
+            this._items.forEach((item) => {
+                const host = this._hostLabel(item.uri);
+                visitCounts.set(host, (visitCounts.get(host) || 0) + 1);
+            });
+
+            let items = this._items.filter((item) => {
+                if (cutoff && this._historyTimeMs(item) < cutoff) return false;
+                if (!term) return true;
+                return item.title.toLowerCase().includes(term) ||
+                    item.uri.toLowerCase().includes(term) ||
+                    this._hostLabel(item.uri).toLowerCase().includes(term);
+            });
+
+            items = items.slice();
+            if (this._activeSort === "site") {
+                items.sort((a, b) => {
+                    const hostCmp = this._hostLabel(a.uri).localeCompare(this._hostLabel(b.uri));
+                    return hostCmp || this._historyTimeMs(b) - this._historyTimeMs(a);
+                });
+            } else if (this._activeSort === "mostvisited") {
+                items.sort((a, b) => {
+                    const countCmp = (visitCounts.get(this._hostLabel(b.uri)) || 0) -
+                        (visitCounts.get(this._hostLabel(a.uri)) || 0);
+                    return countCmp || this._historyTimeMs(b) - this._historyTimeMs(a);
+                });
+            } else if (this._activeSort === "lastvisited" || this._activeSort === "date") {
+                items.sort((a, b) => this._historyTimeMs(b) - this._historyTimeMs(a));
+            }
+            return items;
+        }
+
         resetView() {
+            this.resetControls();
             if (this._wrapper) {
                 this._wrapper.classList.remove("panes-shifted");
                 if (this._container) {
                     this._container.classList.add("scrollbar-visible");
                 }
             }
+        }
+
+        resetControls() {
+            if (!this._filtersOpen) return;
+            this._filtersOpen = false;
         }
 
         render() {
@@ -263,6 +479,10 @@
 
         destroy() {
             this._unsubscribeStore();
+            if (this._searchDebounce) {
+                clearTimeout(this._searchDebounce);
+                this._searchDebounce = null;
+            }
             this._container = null;
             this._closedWindowsContainer = null;
             this._wrapper = null;
@@ -325,12 +545,7 @@
                     this._lastGroupLabel = null;
                 }
 
-                const filtered = this._searchTerm
-                    ? this._items.filter(i =>
-                        i.title.toLowerCase().includes(this._searchTerm.toLowerCase()) ||
-                        i.uri.toLowerCase().includes(this._searchTerm.toLowerCase())
-                    )
-                    : this._items;
+                const filtered = this._filteredAndSortedItems();
 
                 if (filtered.length === 0 && !this._isLoading) {
                     if (!reset) return;
@@ -355,7 +570,9 @@
                         const timeMs = item.time / 1000;
                         let groupLabel = "";
 
-                        if (this._searchTerm) {
+                        if (this._activeSort === "site" || this._activeSort === "mostvisited") {
+                            groupLabel = this._hostLabel(item.uri);
+                        } else if (this._searchTerm) {
                             groupLabel = "Search Results";
                         } else {
                             const d = new Date(timeMs); d.setHours(0, 0, 0, 0);
@@ -369,7 +586,10 @@
                             this._lastGroupLabel = groupLabel;
                         }
 
-                        const displayTime = (this._searchTerm || (this._lastGroupLabel !== "Today" && this._lastGroupLabel !== "Yesterday"))
+                        const displayTime = (this._searchTerm ||
+                            this._activeSort === "site" ||
+                            this._activeSort === "mostvisited" ||
+                            (this._lastGroupLabel !== "Today" && this._lastGroupLabel !== "Yesterday"))
                             ? item.dateStr : item.timeStr;
 
                         const itemEl = document.createElement('zen-library-item');
@@ -377,7 +597,7 @@
                             console.error("ZenLibrary Error: zen-library-item custom element not properly registered");
                             return;
                         }
-                        
+
                         // Set data first so status/logic can apply
                         itemEl.data = item;
 

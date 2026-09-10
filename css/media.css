@@ -32,12 +32,13 @@
 }
 
 /* Active has to stay separable from hover — otherwise hovering an inactive pill reads as
-   selecting it. The old rule leaned on --tab-background-color-selected and --tab-selected-shadow,
-   neither of which Zen defines, so only the ring fallback was ever painted. */
+   selecting it. Same accent-tinted, theme-aware fill as the history filter chips. */
 .media-filter-pill.active {
     opacity: 1;
-    background: var(--zen-toolbar-element-bg-hover);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent);
+    background: light-dark(
+        color-mix(in srgb, var(--zen-primary-color) 24%, transparent),
+        color-mix(in srgb, var(--zen-primary-color) 38%, transparent)
+    );
     font-weight: 600;
 }
 

@@ -12,8 +12,8 @@
 .view-switcher-container {
     display: flex;
     align-items: center;
-    padding: 4px 16px;
-    margin-bottom: 4px;
+    padding: 6px 16px;
+    margin-bottom: 6px;
     gap: 8px;
     cursor: pointer;
     font-size: 11px;
@@ -60,6 +60,85 @@
     pointer-events: auto;
 }
 
+.history-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 14px 12px;
+    box-sizing: border-box;
+    min-width: 0;
+}
+
+.history-filter-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.history-filter-group::-webkit-scrollbar {
+    display: none;
+}
+
+.history-filter-chip,
+.history-sort-select {
+    -moz-window-dragging: no-drag;
+    height: 30px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background: var(--zen-library-hover-bg, rgba(255, 255, 255, 0.08));
+    color: var(--ws-text-color, inherit);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 650;
+    opacity: 0.72;
+    transition: background 0.16s var(--zen-library-easing), opacity 0.16s var(--zen-library-easing), border-color 0.16s var(--zen-library-easing);
+}
+
+.history-filter-chip {
+    padding: 0 12px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.history-filter-chip:hover,
+.history-sort-select:hover {
+    opacity: 0.95;
+    border-color: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.history-filter-chip[active] {
+    opacity: 1;
+    background: light-dark(
+        color-mix(in srgb, var(--zen-primary-color) 24%, transparent),
+        color-mix(in srgb, var(--zen-primary-color) 38%, transparent)
+    );
+    border-color: transparent;
+}
+
+.history-sort-select {
+    flex: 0 0 auto;
+    max-width: 124px;
+    padding: 0 10px;
+    cursor: pointer;
+}
+
+:host([active-tab="history"]) .library-list-container {
+    padding-top: 2px;
+}
+
+:host([active-tab="history"]) .library-list-item .item-icon-container {
+    width: 26px;
+    height: 26px;
+}
+
+:host([active-tab="history"]) .library-list-item .item-icon {
+    width: 18px;
+    height: 18px;
+}
+
 .library-list-wrapper:has(.history-pane) .library-list-panes {
     width: 100%;
 }
@@ -75,7 +154,7 @@
     padding: 0 8px;
     height: 40px;
     cursor: pointer;
-    transition: all 0.2s var(--zen-library-easing);
+    transition: opacity 0.25s ease, transform 0.25s var(--zen-library-easing), background 0.2s var(--zen-library-easing);
     border-radius: var(--border-radius-medium);
     margin: 0 8px;
     color: var(--ws-text-color);
@@ -85,6 +164,22 @@
 
 .history-nav-item:hover {
     background: var(--zen-library-hover-bg, rgba(255, 255, 255, 0.08));
+}
+
+/* Filter-open effect for the subsection buttons: a staggered nudge that keeps
+   them fully visible and clickable. (A previous pass faded them to opacity 0
+   here, which read as the buttons going missing while their space stayed.) */
+.library-header:has(.zen-library-search-top[open]) + .library-content .history-nav-item {
+    opacity: 0.55;
+    transform: translateX(-6px);
+}
+
+.history-nav-item:nth-child(2) {
+    transition-delay: 0.03s;
+}
+
+.history-nav-item:nth-child(3) {
+    transition-delay: 0.06s;
 }
 
 .history-nav-item .nav-icon {
@@ -155,7 +250,7 @@
 }
 
 .history-section-header {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
