@@ -606,19 +606,34 @@
                         itemEl.setAttribute("subtitle", item.uri);
                         itemEl.setAttribute("time", displayTime);
 
+                        const actions = this.el("div", { className: "zen-library-row-actions history-row-actions" });
+                        const removeButton = this.el("button", {
+                            className: "history-row-action history-row-remove",
+                            title: "Remove from history",
+                            onclick: (e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                this._removeHistoryItem(item, itemEl);
+                            }
+                        });
+                        const reopenButton = this.el("button", {
+                            className: "history-row-action history-row-reopen",
+                            title: "Reopen page",
+                            onclick: (e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                this._openHistoryItem(item);
+                            }
+                        });
+                        actions.appendChild(removeButton);
+                        actions.appendChild(reopenButton);
+                        itemEl.appendSecondaryAction(actions);
+
                         if (this._highlightNewerThan && item.time > this._highlightNewerThan) {
                             itemEl.classList.add("pop-in");
                         }
 
-                        itemEl.onclick = () => {
-                            // [audit] SEC-2 — was a system triggering principal on a URI read
-                            // straight out of the Places database. Places will happily store
-                            // data: and other non-web schemes, and a system principal is what
-                            // makes those load *with privilege* rather than merely load.
-                            // Validated against a scheme allowlist, then a null principal.
-                            if (!window.ZenLibraryUtil.openExternal(window, item.uri)) return;
-                            window.gZenLibrary.close();
-                        };
+                        itemEl.onclick = () => this._openHistoryItem(item);
 
                         itemEl.oncontextmenu = (e) => {
                             e.preventDefault();
@@ -642,6 +657,32 @@
         }
 
         loadMore() { if (!this._isLoading) this.renderBatch(false); }
+
+        _openHistoryItem(item) {
+            // [audit] SEC-2 — was a system triggering principal on a URI read
+            // straight out of the Places database. Places will happily store
+            // data: and other non-web schemes, and a system principal is what
+            // makes those load *with privilege* rather than merely load.
+            // Validated against a scheme allowlist, then a null principal.
+            if (!window.ZenLibraryUtil.openExternal(window, item.uri)) return;
+            window.gZenLibrary.close();
+        }
+
+        async _removeHistoryItem(item, itemEl) {
+            try {
+                const { PlacesUtils } = ChromeUtils.importESModule("resource://gre/modules/PlacesUtils.sys.mjs");
+                await PlacesUtils.history.remove(item.uri);
+                this._items = this._items.filter(i => i.uri !== item.uri);
+                if (itemEl) {
+                    itemEl.style.transition = "opacity 0.15s, transform 0.15s";
+                    itemEl.style.opacity = "0";
+                    itemEl.style.transform = "translateX(-8px)";
+                }
+                setTimeout(() => this.renderBatch(true), 160);
+            } catch (err) {
+                console.error("[ZenLibrary History] Remove history item failed:", err);
+            }
+        }
 
         _copyToClipboard(text) {
             try {
@@ -736,17 +777,7 @@
             });
 
             document.getElementById("zen-history-ctx-delete").addEventListener("command", async () => {
-                try {
-                    const { PlacesUtils } = ChromeUtils.importESModule("resource://gre/modules/PlacesUtils.sys.mjs");
-                    await PlacesUtils.history.remove(item.uri);
-                    this._items = this._items.filter(i => i.uri !== item.uri);
-                    itemEl.style.transition = "opacity 0.15s, transform 0.15s";
-                    itemEl.style.opacity = "0";
-                    itemEl.style.transform = "translateX(-8px)";
-                    setTimeout(() => this.renderBatch(true), 160);
-                } catch (err) {
-                    console.error("[ZenLibrary History] Delete failed:", err);
-                }
+                this._removeHistoryItem(item, itemEl);
             });
 
             popup.openPopupAtScreen(e.screenX, e.screenY, true);
