@@ -1,9 +1,9 @@
 :host {
   /* :library-root */
-  /* 10rem sidebar; list sections run compact. */
-  --zen-library-width: 404px;
-  --zen-library-sidebar-width: 10rem;
-  --zen-library-easing: cubic-bezier(0.25, 1, 0.5, 1);
+  /* Native zen-library: 84px sidebar + 27rem content. */
+  --zen-library-width: 516px;
+  --zen-library-sidebar-width: 84px;
+  --zen-library-easing: cubic-bezier(0.32, 0.72, 0, 1);
   --zen-library-progress: 1;
 
   display: block;
@@ -14,7 +14,8 @@
   bottom: 0;
   left: 0;
   z-index: 9;
-  width: var(--zen-library-width, 404px);
+  width: var(--zen-library-width, 516px);
+  transition: width var(--zen-library-width-duration, 0.15s) ease-in-out;
   min-height: 0;
   opacity: var(--zen-library-progress, 1);
   transform: translateX(calc(-100% * (1 - var(--zen-library-progress, 1))));
@@ -132,56 +133,6 @@
 }
 
 /* GLOBAL ANIMATIONS */
-@keyframes blockSlideIn {
-  from {
-    transform: translateX(-90px);
-  }
-
-  to {
-    transform: translateX(0);
-  }
-}
-
-@keyframes blockSlideOut {
-  from {
-    transform: translateX(0);
-  }
-
-  to {
-    transform: translateX(-90px);
-  }
-}
-
-@keyframes blockSlideInRight {
-  from {
-    transform: translateX(90px);
-  }
-
-  to {
-    transform: translateX(0);
-  }
-}
-
-@keyframes blockSlideOutRight {
-  from {
-    transform: translateX(0);
-  }
-
-  to {
-    transform: translateX(90px);
-  }
-}
-
-@keyframes contentFadeOut {
-  from {
-    opacity: 1;
-  }
-
-  to {
-    opacity: 0;
-  }
-}
-
 @keyframes contentFadeIn {
   from {
     opacity: 0;
@@ -218,20 +169,6 @@
   }
 }
 
-@keyframes zenLibrarySectionPop {
-  0% {
-    transform: scale(0.92);
-  }
-
-  58% {
-    transform: scale(1.08);
-  }
-
-  100% {
-    transform: scale(1);
-  }
-}
-
 /* SIDEBAR */
 /* Divider per the PR: a soft gradient wash + faint offset shadow, no border. */
 #zen-library-sidebar-container {
@@ -242,27 +179,17 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 15px 0 6px 0;
+  padding: 8px;
   box-sizing: border-box;
   background: linear-gradient(to right, transparent, rgba(255, 255, 255, 0.08));
   box-shadow: 9px 0 17px rgba(0, 0, 0, 0.04);
   z-index: 2;
   position: relative;
-  animation: none;
 }
 
 :host([right-side]) #zen-library-sidebar-container {
   background: linear-gradient(to left, transparent, rgba(255, 255, 255, 0.08));
   box-shadow: -9px 0 17px rgba(0, 0, 0, 0.04);
-  animation-name: blockSlideInRight;
-}
-
-:host(.closing) #zen-library-sidebar-container {
-  animation: none;
-}
-
-:host([right-side].closing) #zen-library-sidebar-container {
-  animation-name: blockSlideOutRight;
 }
 
 /* Window-buttons dock. Hidden while empty so the sidebar rhythm is unchanged
@@ -272,9 +199,8 @@
   display: none;
   align-items: center;
   justify-content: flex-start;
-  padding: 0 0 8px 4px;
-  margin-top: -3px;
-  margin-left: 20px;
+  padding: 0 0 8px 0;
+  justify-content: center;
   -moz-window-dragging: drag;
   flex-shrink: 0;
   width: 100%;
@@ -307,11 +233,11 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 4px;
   cursor: pointer;
   width: auto;
-  margin: 0 8px;
-  padding: 20px 0;
+  margin: 0;
+  padding: 12px 0;
   border-radius: var(--border-radius-medium);
   opacity: 0.6;
 }
@@ -327,28 +253,6 @@
   font-weight: 600;
 }
 
-/* The six section icons are inline <svg> appended straight to .sidebar-button and are
-   sized by their own width/height attributes; .icon is what the Exit Library back-icon
-   and the fallback icon <div> use. Two blocks for this selector were merged: the second
-   set `transition: opacity`, which replaced the first's `transition: transform` outright
-   rather than adding to it, so the transform transition never ran. */
-.sidebar-button .icon {
-  width: 32px;
-  height: 32px;
-  opacity: 0.7;
-  transition: opacity 0.3s var(--zen-library-easing);
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.sidebar-button .icon svg {
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-
 .sidebar-button .label {
   font-size: 11px;
   text-align: center;
@@ -358,10 +262,6 @@
 
 .sidebar-button.active .label {
   font-weight: 600 !important;
-  opacity: 1;
-}
-
-.sidebar-button.active .icon {
   opacity: 1;
 }
 
@@ -376,7 +276,7 @@
   display: flex;
   justify-content: space-between;
   box-sizing: border-box;
-  padding: 4px 8px;
+  padding: 4px 0;
   -moz-window-dragging: no-drag;
 }
 
@@ -390,15 +290,6 @@
   -moz-window-dragging: no-drag;
   -moz-context-properties: fill, fill-opacity;
   fill: var(--toolbarbutton-icon-fill, currentColor);
-}
-
-.sidebar-footer-button:not(toolbarbutton) {
-  appearance: none;
-  border: none;
-  background: transparent;
-  width: 28px;
-  height: 28px;
-  padding: 0;
 }
 
 :host .sidebar-footer-button.toolbarbutton-1 .toolbarbutton-text,
@@ -438,40 +329,6 @@
   transform: scale(0.95);
 }
 
-.sidebar-footer-button .icon {
-  width: 16px;
-  height: 16px;
-  opacity: 1;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .sidebar-button[animate] > svg,
-  .sidebar-button[animate] > .icon {
-    animation: zenLibrarySectionPop 0.36s var(--zen-library-easing) both;
-    transform-origin: center;
-  }
-}
-
-.back-icon {
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='19' y1='12' x2='5' y2='12'%3E%3C/line%3E%3Cpolyline points='12 19 5 12 12 5'%3E%3C/polyline%3E%3C/svg%3E");
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  background-color: currentColor !important;
-  width: 16px !important;
-  height: 16px !important;
-}
-
-.donate-icon {
-  mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='black' d='M12 21.35 10.55 20.03C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3 9.24 3 10.91 3.81 12 5.08 13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5 22 12.28 18.6 15.36 13.45 20.04L12 21.35Z'/%3E%3C/svg%3E");
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  background-color: currentColor !important;
-  width: 16px !important;
-  height: 16px !important;
-}
-
 /* MAIN PANEL */
 /* No top padding here: every section header carries the PR's 12px top
    spacing itself, so all search bars start at the same height. */
@@ -484,37 +341,13 @@
   padding: 0;
   box-sizing: border-box;
   z-index: 1;
-  animation: none;
   flex-shrink: 0;
   flex-grow: 0;
   min-height: 0;
 }
 
-:host([right-side]) #zen-library-main-panel {
-  animation-name: blockSlideInRight;
-}
-
 :host([active-tab="spaces"]) #zen-library-main-panel {
   padding: 0;
-}
-
-:host(.closing) #zen-library-main-panel {
-  animation: none;
-}
-
-:host([right-side].closing) #zen-library-main-panel {
-  animation-name: blockSlideOutRight;
-}
-
-.library-header,
-.library-content {
-  opacity: 1;
-  animation: none;
-}
-
-:host(.closing) .library-header,
-:host(.closing) .library-content {
-  animation: none;
 }
 
 .library-content {
@@ -542,8 +375,7 @@
   pointer-events: none !important;
 }
 
-/* SEARCH — every section builds the .zen-library-search-top pill component;
-   the legacy .search-container rules were removed with its last producer. */
+/* SEARCH — every section builds the .zen-library-search-top pill component. */
 .zen-library-search-top {
   display: grid;
   grid-template-columns: 1fr;
@@ -642,6 +474,7 @@
 }
 
 .zen-library-filter-button:hover,
+.zen-library-filter-button[open],
 .zen-library-filter-done:hover,
 .zen-library-filter-chip:hover {
   background: var(--zen-library-pill-hover-bg);
@@ -719,11 +552,11 @@
 }
 
 /* SHARED LIST STYLES */
+/* In flow below the back button: the old absolute box (inset 0 + 30px margin) painted over the button and ate its clicks. */
 .library-closed-windows-container {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  flex: 1;
   flex-direction: column;
-  margin-top: 30px;
   overflow-y: hidden;
   gap: 4px;
   min-height: 0;
@@ -793,10 +626,7 @@
 }
 
 .library-list-item:hover {
-  background: var(
-    --zen-library-hover-bg,
-    var(--ws-tab-hover-color, rgba(255, 255, 255, 0.08))
-  );
+  background: var(--zen-library-hover-bg, rgba(255, 255, 255, 0.08));
 }
 
 .library-list-item:active {

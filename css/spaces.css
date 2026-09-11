@@ -699,12 +699,14 @@
 
 /* Nothing unpinned: no Clear target, so the row stays out of the way unless a tab is
    being dragged (it is still the pin/unpin drop zone). */
-.library-workspace-separator-container[no-unpinned] {
+/* Nothing pinned: like Zen's sidebar, no separator row above the first tab either. */
+.library-workspace-separator-container[no-unpinned],
+.library-workspace-separator-container[no-pinned] {
     display: none;
 }
 
-.library-workspace-grid[dragging-tab] .library-workspace-separator-container[no-unpinned],
-.library-workspace-grid[dragging-folder] .library-workspace-separator-container[no-unpinned] {
+.library-workspace-grid[dragging-tab] .library-workspace-separator-container:is([no-unpinned], [no-pinned]),
+.library-workspace-grid[dragging-folder] .library-workspace-separator-container:is([no-unpinned], [no-pinned]) {
     display: flex;
 }
 

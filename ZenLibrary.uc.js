@@ -260,8 +260,8 @@
             }
             // Leaving History collapses its filter panel, so returning never
             // lands on a stale open filter state.
-            if (this._activeTab === "history" && this.history) {
-                this.history._filtersOpen = false;
+            if (this._activeTab === "history") {
+                this.history?.resetControls?.();
             }
             this._activeTab = val;
             if (window.gZenLibrary) {
@@ -269,7 +269,7 @@
                 window.gZenLibrary._writeLastActiveTab?.(val);
             }
             this.setAttribute("active-tab", val);
-            try { this.style.setProperty("--zen-library-filter-height", "0px"); } catch (e) { }
+            this.style.setProperty("--zen-library-filter-height", "0px");
             this.update();
         }
 
@@ -642,49 +642,24 @@
                     // (#zen-expand-sidebar-button): list-style-image + context-fill,
                     // themed by --toolbarbutton-icon-fill. The image URL lives in CSS
                     // so it matches how Zen declares every other toolbar icon.
-                    // Falls back to a plain button if XUL creation is unavailable.
-                    const makeFooterButton = (title, fallbackIconClass, command) => {
-                        let btn = null;
-                        try {
-                            if (typeof document.createXULElement === "function") {
-                                btn = document.createXULElement("toolbarbutton");
-                                btn.className = "toolbarbutton-1 chromeclass-toolbar-additional zen-sidebar-action-button sidebar-footer-button";
-                                // XUL tooltips read tooltiptext, not title.
-                                btn.setAttribute("tooltiptext", title);
-                            }
-                        } catch (e) { btn = null; }
-                        if (!btn) {
-                            btn = document.createElement("button");
-                            btn.className = "sidebar-footer-button";
-                            btn.innerHTML = `<div class="icon ${fallbackIconClass}"></div>`;
-                        }
-                        btn.title = title;
+                    const makeFooterButton = (title, command) => {
+                        const btn = document.createXULElement("toolbarbutton");
+                        btn.className = "toolbarbutton-1 chromeclass-toolbar-additional zen-sidebar-action-button sidebar-footer-button";
+                        // XUL tooltips read tooltiptext, not title.
+                        btn.setAttribute("tooltiptext", title);
                         btn.setAttribute("aria-label", title);
                         btn.addEventListener("command", command);
-                        // `command` covers the XUL case; plain buttons only fire click.
-                        btn.addEventListener("click", (e) => {
-                            if (e.target?.closest?.("toolbarbutton")) return;
-                            command();
-                        });
                         return btn;
                     };
 
-                    const exitBtn = makeFooterButton(
-                        "Exit Library",
-                        "back-icon",
-                        () => window.gZenLibrary.close()
-                    );
+                    const exitBtn = makeFooterButton("Exit Library", () => window.gZenLibrary.close());
                     exitBtn.classList.add("sidebar-button-exit");
                     exitBtn.dataset.id = "exit";
 
-                    const donateBtn = makeFooterButton(
-                        "Donate to Zen",
-                        "donate-icon",
-                        () => {
-                            window.openTrustedLinkIn("https://www.zen-browser.app/donate", "tab");
-                            window.gZenLibrary.close();
-                        }
-                    );
+                    const donateBtn = makeFooterButton("Donate to Zen", () => {
+                        window.openTrustedLinkIn("https://www.zen-browser.app/donate", "tab");
+                        window.gZenLibrary.close();
+                    });
                     donateBtn.classList.add("sidebar-button-donate");
                     donateBtn.dataset.id = "donate";
 
@@ -712,8 +687,6 @@
                 }
                 this.setAttribute("active-tab", this.activeTab);
                 this.update();
-                this.getBoundingClientRect();
-                requestAnimationFrame(() => requestAnimationFrame(() => this.style.width = ""));
             } catch (e) {
                 console.error("ZenLibrary Error in connectedCallback:", e);
             }
@@ -729,51 +702,6 @@
             // If the panel is torn down without going through close(), put it back
             // before the host (and those buttons) leave the document.
             try { window.gZenLibrary?._restoreWindowButtons(); } catch (e) { }
-        }
-
-        // getComputedStyle flushes layout, so margins are read once per panel
-        // open and cached; the border box itself is still measured live.
-        _measureBoxOccupied(el) {
-            try {
-                this._boxMarginCache ||= new Map();
-                let margins = this._boxMarginCache.get(el);
-                if (margins === undefined) {
-                    margins = 0;
-                    try {
-                        const cs = getComputedStyle(el);
-                        margins = (parseFloat(cs.marginLeft) || 0) + (parseFloat(cs.marginRight) || 0);
-                    } catch (e) { }
-                    this._boxMarginCache.set(el, margins);
-                }
-                const raw = window.windowUtils?.getBoundsWithoutFlushing
-                    ? window.windowUtils.getBoundsWithoutFlushing(el).width
-                    : el.getBoundingClientRect().width;
-                return (raw || 0) + margins;
-            } catch (e) {
-                return 0;
-            }
-        }
-
-        // Live toolbox width for the PR shift (panel minus toolbox). The
-        // controller carries an identical helper for its progress setter;
-        // this one serves the element's update() pass.
-        _measureToolboxWidth() {
-            try {
-                const tb = document.getElementById("navigator-toolbox");
-                if (!tb) return 0;
-                if (window.gZenLibrary?._isCompactSidebarHidden?.() &&
-                    !window.gZenLibrary?._isCompactSidebarVisible?.(tb)) {
-                    return 0;
-                }
-                let width = this._measureBoxOccupied(tb);
-                if (document.documentElement.hasAttribute("zen-sidebar-expanded")) {
-                    const splitter = document.getElementById("zen-sidebar-splitter");
-                    if (splitter) width += this._measureBoxOccupied(splitter);
-                }
-                return width;
-            } catch (e) {
-                return 0;
-            }
         }
 
         // [audit] BUG-3 — `force` is new, and its absence was a real bug rather than an
@@ -793,10 +721,8 @@
                     return;
                 }
 
-                // Common width calculation
-                // Compact scale for the list sections (media/spaces size themselves).
-                // Never wider than 95vw.
-                let targetWidth = 404;
+                // Native zen-library: 84px sidebar + 27rem content (media/spaces size themselves). Never wider than 95vw.
+                let targetWidth = 516;
                 // Assuming ZenLibrarySpaces is available on window if Spaces module loaded
                 if (this.activeTab === "spaces" && window.ZenLibrarySpaces) {
                     const ws = window.ZenLibrarySpaces.getWorkspaces();
@@ -806,40 +732,30 @@
                     if (window.ZenLibrarySpaces && window.ZenLibrarySpaces.calculateMediaWidth) {
                         targetWidth = window.ZenLibrarySpaces.calculateMediaWidth(count);
                     } else {
-                        // Fallback logic if module missing
-                        const widthCalc = 404; // Default
-                        targetWidth = widthCalc;
+                        targetWidth = 516;
                     }
                 } else if (this.activeTab === "easels") {
-                    // Excluded from the list widths: the fluid two-column grid
-                    // is exact at 160 sidebar + 36 side padding + 320 cards + 18 gap.
-                    targetWidth = 534;
+                    // The fluid two-column grid is exact at 84 sidebar + 36 side padding + 320 cards + 18 gap.
+                    targetWidth = 458;
                 }
 
-                try {
-                    targetWidth = Math.min(Math.max(targetWidth, 404), window.innerWidth * 0.95);
-                } catch (e) { }
+                targetWidth = Math.min(Math.max(targetWidth, 516), window.innerWidth * 0.95);
                 this._lastTargetWidth = targetWidth;
 
-                // PR shift: panel width minus the live toolbox width it covers.
-                const toolboxWidth = this._measureToolboxWidth();
+                // PR shift: panel width minus the live toolbox width; measured by the controller so the tween agrees.
+                const toolboxWidth = window.gZenLibrary?._measureToolboxWidth?.() ?? 0;
                 const offset = Math.max(0, targetWidth - toolboxWidth);
 
                 this.style.setProperty("--zen-library-width", `${targetWidth}px`);
                 document.documentElement.style.setProperty("--zen-library-offset", `${offset}px`);
-                document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${this.hasAttribute("right-side") ? -offset : offset}px`);
+                // The content shift follows the live (transitioning) width via the controller's ResizeObserver.
+                window.gZenLibrary?._syncShift?.();
 
                 for (const id in this._sidebarItemEls) {
                     const item = this._sidebarItemEls[id];
                     const isActive = id === this.activeTab;
                     const wasActive = item.classList.contains("active");
                     item.classList.toggle("active", isActive);
-                    if (isActive && !wasActive) {
-                        item.removeAttribute("animate");
-                        item.getBoundingClientRect();
-                        item.setAttribute("animate", "true");
-                        setTimeout(() => item.removeAttribute("animate"), 420);
-                    }
                 }
 
                 const content = this.shadowRoot.querySelector(".library-content");
@@ -863,11 +779,10 @@
                 // Header / Search Bar Logic
                 if (this.activeTab !== "spaces") {
                     if (force || tabChanged || !header.firstElementChild) {
+                        // Read before the header is cleared; a forced rebuild must not wipe the field or drop focus (Easels re-renders through update(true)).
+                        const hadFocus = this.shadowRoot.activeElement?.closest?.(".library-header") != null;
                         header.innerHTML = "";
-                        let val = "";
-                        if (this.history && this.activeTab === "history") val = this.history._searchTerm;
-                        else if (this.downloads && this.activeTab === "downloads") val = this.downloads._searchTerm;
-                        else if (this.media && this.activeTab === "media") val = this.media._searchTerm;
+                        const val = this[this.activeTab]?._searchTerm || "";
 
                         // [audit] PERF-1 — the results pass is debounced. It used to run on
                         // every keystroke, and for Downloads and Media that meant a full
@@ -907,7 +822,7 @@
                                 // through update() rather than having a render call of its own.
                                 this.update(true);
                             }
-                        }, 180);
+                        }, 300);
 
                         const module = this[this.activeTab];
                         if (module && typeof module.renderHeaderControls === "function") {
@@ -947,7 +862,8 @@
                                         alt: ""
                                     }),
                                     searchInput
-                                ])
+                                ]),
+                                typeof module?.renderFilterButton === "function" ? module.renderFilterButton() : null
                             ]));
                             header.appendChild(top);
 
@@ -955,6 +871,11 @@
                             if (module && typeof module.renderFilterBar === "function") {
                                 header.appendChild(module.renderFilterBar());
                             }
+                        }
+                        if (hadFocus) {
+                            const input = header.querySelector("input");
+                            input?.focus();
+                            try { input?.setSelectionRange(input.value.length, input.value.length); } catch (e) { }
                         }
                     }
                 } else {
@@ -1104,7 +1025,6 @@
             this._initTimer = null;
             this._buttonListener = null;
             this._buttonPrefObserver = null;
-            this._rightSidePrefObserver = null;
             this._sidebarModePrefObserver = null;
             this._sidebarModeAttrObserver = null;
             this._sidebarModeSyncFrame = 0;
@@ -1162,10 +1082,14 @@
             // because the toolbar button belongs to the application, not to this window.
             window.addEventListener("unload", this._onUnload, { once: true });
 
-            if (!document.getElementById("zen-library-global-style")) {
-                const s = document.createElement("style");
+            // Always (re)written: an older build left this element empty, and a Sine reload keeps it.
+            let s = document.getElementById("zen-library-global-style");
+            if (!s) {
+                s = document.createElement("style");
                 s.id = "zen-library-global-style";
-                s.textContent = `
+                document.head.appendChild(s);
+            }
+            s.textContent = `
 :root {
   --zen-library-progress: 0;
   --zen-library-wrapper-target-px: 0px;
@@ -1178,25 +1102,26 @@
 }
 
 /* PR motion (literal): target-px carries the full signed offset and progress
-   scales it, recomputed from live geometry on every spring frame — no CSS
-   transition anywhere, so open and close are the same spring curve. */
+   scales it, recomputed from live geometry on every frame — no CSS
+   transition anywhere, so open and close are the same curve. */
+/* Not #urlbar: it is position:fixed (zen-omnibox.css) and already rides whichever transformed ancestor contains it. */
 :root[zen-library-open] #zen-appcontent-wrapper,
-:root[zen-library-open-compact] #zen-appcontent-wrapper,
-:root[zen-library-open] #urlbar:not([open]),
-:root[zen-library-open-compact] #urlbar:not([open]) {
+:root[zen-library-open-compact] #zen-appcontent-wrapper {
   transform: translateX(calc(var(--zen-library-progress, 0) * var(--zen-library-wrapper-target-px, 0px)));
 }
 
+/* filter, not opacity: a userChrome/user-sheet "opacity: 1 !important" on the toolbox beats any author rule. */
 :root[zen-library-open] #navigator-toolbox,
 :root[zen-library-open-compact] #navigator-toolbox {
-  --zen-library-toolbox-progress: min(1, calc(var(--zen-library-progress) * 2));
-  transform: scale(calc(1 - var(--zen-library-toolbox-progress) * 0.04));
-  opacity: calc(1 - var(--zen-library-toolbox-progress));
+  transform: scale(calc(1 - var(--zen-library-progress) * 0.04));
+  filter: opacity(calc(1 - min(1, var(--zen-library-progress) * 1.5)));
+}
+
+/* Compact mode's toolbox is fixed at z-index 10 and slides in on mouseover; at opacity 0 it would still catch clicks over the panel. */
+:root[zen-library-open-compact] #navigator-toolbox {
+  pointer-events: none;
 }
 `;
-                document.head.appendChild(s);
-            }
-            this._watchRightSidePlacement();
             this._watchSidebarMode();
 
             // CustomizableUI is not ready at script-load time on a cold start — the same
@@ -1417,16 +1342,7 @@
             }
         }
 
-        _watchRightSidePlacement() {
-            if (this._rightSidePrefObserver) return;
-            this._rightSidePrefObserver = {
-                observe: () => this._syncRightSidePlacement()
-            };
-            try {
-                Services.prefs.addObserver("zen.tabs.vertical.right-side", this._rightSidePrefObserver);
-            } catch (e) { }
-        }
-
+        // Driven by the zen-right-side attribute mutation: at pref-change time Zen has not yet moved the sidebar.
         _syncRightSidePlacement() {
             const el = this._element;
             if (!el?.parentNode) return;
@@ -1436,19 +1352,11 @@
             if (!browser) return;
             if (isRightSide && el.parentNode.lastElementChild !== el) browser.append(el);
             if (!isRightSide && el.parentNode.firstElementChild !== el) browser.prepend(el);
-            this.update(true);
         }
 
-        _isCompactModeActive() {
-            try {
-                return document.documentElement.getAttribute("zen-compact-mode") === "true";
-            } catch (e) {
-                return false;
-            }
-        }
-
+        // Mirrors zen-compact-mode.css: with either pref the compact toolbox is position:fixed, hovered or not.
         _isCompactSidebarHidden() {
-            if (!this._isCompactModeActive()) return false;
+            if (document.documentElement.getAttribute("zen-compact-mode") !== "true") return false;
             try {
                 return Services.prefs.getBoolPref("zen.view.compact.hide-tabbar", false) ||
                     Services.prefs.getBoolPref("zen.view.use-single-toolbar", false) ||
@@ -1458,24 +1366,15 @@
             }
         }
 
-        _isCompactSidebarVisible(toolbox = document.getElementById("navigator-toolbox")) {
-            if (!this._isCompactSidebarHidden()) return true;
-            if (!toolbox) return false;
-            return toolbox.hasAttribute("zen-has-hover") ||
-                toolbox.hasAttribute("zen-has-implicit-hover") ||
-                toolbox.hasAttribute("zen-user-show") ||
-                toolbox.hasAttribute("has-popup-menu") ||
-                toolbox.hasAttribute("zen-compact-mode-active") ||
-                toolbox.hasAttribute("panelopen") ||
-                toolbox.hasAttribute("open");
-        }
-
         _syncLibraryOpenModeAttributes() {
             if (!this._isOpen && !this._isTransitioning) return;
-            const compactHidden = this._isCompactSidebarHidden() &&
-                !this._isCompactSidebarVisible();
-            document.documentElement.toggleAttribute("zen-library-open-compact", compactHidden);
-            document.documentElement.toggleAttribute("zen-library-open", !compactHidden);
+            const compactHidden = this._isCompactSidebarHidden();
+            // Value "true", not a bare attribute: animator.css matches [zen-library-open="true"].
+            const root = document.documentElement;
+            if (compactHidden) root.setAttribute("zen-library-open-compact", "true");
+            else root.removeAttribute("zen-library-open-compact");
+            if (compactHidden) root.removeAttribute("zen-library-open");
+            else root.setAttribute("zen-library-open", "true");
         }
 
         _scheduleSidebarModeSync() {
@@ -1484,12 +1383,14 @@
                 this._sidebarModeSyncFrame = 0;
                 if (!this._element) return;
                 this._boxMarginCache = null;
+                this._syncRightSidePlacement();
                 this._syncLibraryOpenModeAttributes();
                 this.update(true);
                 this._setOpenProgress(this._openProgress);
             });
         }
 
+        // Layout-mode changes while open: root attributes Zen flips in _updateEvent, plus the prefs the CSS reads directly.
         _watchSidebarMode() {
             if (this._sidebarModeAttrObserver) return;
             const sync = () => this._scheduleSidebarModeSync();
@@ -1498,36 +1399,15 @@
             try { Services.prefs.addObserver("zen.view.use-single-toolbar", this._sidebarModePrefObserver); } catch (e) { }
 
             this._sidebarModeAttrObserver = new MutationObserver(sync);
-            try {
-                this._sidebarModeAttrObserver.observe(document.documentElement, {
-                    attributes: true,
-                    attributeFilter: [
-                        "zen-compact-mode",
-                        "zen-sidebar-expanded",
-                        "zen-single-toolbar",
-                        "zen-right-side"
-                    ]
-                });
-            } catch (e) { }
-
-            const toolbox = document.getElementById("navigator-toolbox");
-            if (toolbox) {
-                try {
-                    this._sidebarModeAttrObserver.observe(toolbox, {
-                        attributes: true,
-                        attributeFilter: [
-                            "zen-sidebar-expanded",
-                            "zen-has-hover",
-                            "zen-has-implicit-hover",
-                            "zen-user-show",
-                            "has-popup-menu",
-                            "zen-compact-mode-active",
-                            "panelopen",
-                            "open"
-                        ]
-                    });
-                } catch (e) { }
-            }
+            this._sidebarModeAttrObserver.observe(document.documentElement, {
+                attributes: true,
+                attributeFilter: [
+                    "zen-compact-mode",
+                    "zen-sidebar-expanded",
+                    "zen-single-toolbar",
+                    "zen-right-side"
+                ]
+            });
         }
 
         /**
@@ -1566,44 +1446,72 @@
         }
 
         _closeUrlbar() {
+            try {
+                window.docShell.treeOwner.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIAppWindow).rollupAllPopups();
+            } catch (e) { }
             try { window.gURLBar?.view?.close?.(); } catch (e) { }
             try { window.gURLBar?.blur?.(); } catch (e) { }
             try { document.getElementById("urlbar")?.blur?.(); } catch (e) { }
         }
 
-        // Collects the URL chrome nodes once per open (ids differ by layout;
-        // Zen's standalone search glass is a sibling the id list alone misses).
-        // The per-frame painter owns their opacity/visibility while tracked.
+        // Re-derives the content shift from the panel's live width outside a tween (section width transition, window resize).
+        _syncShift() {
+            if (this._element?.parentNode && !this._isTransitioning) this._setOpenProgress(this._openProgress);
+        }
+
+        _watchPanelSize(el) {
+            this._unwatchPanelSize();
+            this._panelResizeObserver = new ResizeObserver(() => this._syncShift());
+            this._panelResizeObserver.observe(el);
+        }
+
+        _unwatchPanelSize() {
+            this._panelResizeObserver?.disconnect();
+            this._panelResizeObserver = null;
+        }
+
+        // Animation settings from the mod's preferences page; read per open so changes apply without a restart.
+        static EASINGS = {
+            native: [0.32, 0.72, 0, 1],
+            snappy: [0.2, 0, 0, 1],
+            smooth: [0.25, 1, 0.5, 1],
+            linear: [0, 0, 1, 1]
+        };
+
+        // Sine stores "number" inputs as int prefs, but a hand-edited value may be a string; accept both.
+        _prefNumber(name, fallback) {
+            try {
+                if (Services.prefs.getPrefType(name) === Services.prefs.PREF_INT) return Services.prefs.getIntPref(name);
+                const n = Number(Services.prefs.getStringPref(name, ""));
+                return Number.isFinite(n) && n >= 0 ? n : fallback;
+            } catch (e) { return fallback; }
+        }
+
+        _animationDuration() {
+            return this._prefNumber("zen.library.animation.duration", 280);
+        }
+
+        _animationEasing() {
+            let name = "native";
+            try { name = Services.prefs.getStringPref("zen.library.animation.easing", "native"); } catch (e) { }
+            return ZenLibrary.EASINGS[name] || ZenLibrary.EASINGS.native;
+        }
+
+        _applyAnimationSettings(el) {
+            el.style.setProperty("--zen-library-width-duration", `${this._prefNumber("zen.library.animation.width-duration", 150)}ms`);
+            el.style.setProperty("--zen-library-easing", `cubic-bezier(${this._animationEasing().join(", ")})`);
+        }
+
+        // Only the pill's container: in the multi-toolbar layout #nav-bar also holds the Windows caption buttons.
         _sweepUrlbarNodes() {
-            const seen = new Set();
-            const out = [];
-            const add = (node) => {
-                if (node?.nodeType === 1 && node.style && !seen.has(node)) {
-                    seen.add(node);
-                    out.push(node);
-                }
-            };
-            add(document.getElementById("urlbar"));
-            add(document.getElementById("urlbar-container"));
-            add(document.getElementById("nav-bar"));
-            const bar = document.getElementById("urlbar");
-            const parent = bar?.parentNode;
-            if (parent && parent !== document.documentElement && parent !== document.body) {
-                let cls = "";
-                try { cls = String(parent.className?.baseVal ?? parent.className ?? ""); } catch (e) { }
-                const tag = `${parent.id || ""} ${cls}`.toLowerCase();
-                if (/urlbar|nav-bar|navbar|search/.test(tag) &&
-                    !/browser|main-window|tabbox|appcontent|tabbrowser/.test(tag)) {
-                    add(parent);
-                }
-            }
-            return out;
+            // #urlbar too: it is position:fixed and Zen's compact CSS re-asserts its visibility.
+            return ["urlbar-container", "urlbar"].map(id => document.getElementById(id)).filter(Boolean);
         }
 
         _paintUrlbarChrome(progress) {
             const nodes = this._hiddenUrlbarNodes;
             if (!nodes) return;
-            const faded = 1 - Math.min(1, progress * 2);
+            const faded = 1 - Math.min(1, progress * 1.5);
             for (const node of nodes) {
                 try {
                     node.style.setProperty("opacity", String(faded));
@@ -1648,15 +1556,11 @@
             }
         }
 
-        // Live toolbox width for the PR shift (panel minus toolbox), mirroring
-        // the PR setter which measures both boxes on every frame.
+        // Live toolbox width for the PR shift; zero in compact mode, where the toolbox is fixed and out of flow.
         _measureToolboxWidth() {
             try {
                 const tb = document.getElementById("navigator-toolbox");
-                if (!tb) return 0;
-                if (this._isCompactSidebarHidden() && !this._isCompactSidebarVisible(tb)) {
-                    return 0;
-                }
+                if (!tb || this._isCompactSidebarHidden()) return 0;
                 let width = this._measureBoxOccupied(tb);
                 if (document.documentElement.hasAttribute("zen-sidebar-expanded")) {
                     const splitter = document.getElementById("zen-sidebar-splitter");
@@ -1673,67 +1577,127 @@
             this._openProgress = progress;
             document.documentElement.style.setProperty("--zen-library-progress", String(progress));
             this._element?.style?.setProperty("--zen-library-progress", String(progress));
-            // PR setter, every frame: shift = live panel width minus live
-            // toolbox width, signed for right-side placement.
             try {
-                let panelWidth = this._lastTargetWidth || 0;
-                if (this._element?.parentNode && window.windowUtils?.getBoundsWithoutFlushing) {
-                    const live = window.windowUtils.getBoundsWithoutFlushing(this._element).width;
-                    if (live > 0) panelWidth = live;
-                }
-                const shift = Math.max(0, panelWidth - this._measureToolboxWidth());
-                const signed = (this._element?.hasAttribute("right-side") ? -1 : 1) * shift;
-                document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${signed}px`);
+                document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${this._measureShift()}px`);
             } catch (e) { }
-            // Past 60% the live caption cluster docks in the Library sidebar, and
-            // only when Zen has forced those controls onto the left. Default
-            // Windows placement keeps them in the titlebar, so stealing them would
-            // hide them from the wrong edge. No clone is left behind — that is
-            // what painted a dead restore in the titlebar.
-            const pastPoint = progress > 0.6 && this._windowControlsForcedLeft();
-            if (pastPoint && !this._windowButtonsAdopted) this._adoptWindowButtons();
-            else if (!pastPoint && this._windowButtonsAdopted) this._restoreWindowButtons();
-            // URL chrome (pill, nav buttons, standalone search glass) fades on
-            // the same doubled-progress curve as the sidebar and flips to
-            // hidden only once the spring lands at full open — one driver, so
-            // open and close are the same motion.
+            this._applyWindowButtonDock(progress);
+            // The URL pill fades on the toolbox's curve and hides only once the tween lands.
             this._paintUrlbarChrome(progress);
         }
 
+        // Past 60% the live caption cluster docks here, only when it sits in the toolbox this panel fades; no clone is left behind.
+        _applyWindowButtonDock(progress) {
+            const pastPoint = progress > 0.6 && this._windowButtonsInToolbox();
+            if (pastPoint && !this._windowButtonsAdopted) this._adoptWindowButtons();
+            else if (!pastPoint && this._windowButtonsAdopted) this._restoreWindowButtons();
+        }
+
         _stopSpringAnimation() {
+            for (const anim of this._openAnimations || []) {
+                try { anim.cancel(); } catch (e) { }
+            }
+            this._openAnimations = null;
+            if (this._dockTimer) {
+                clearTimeout(this._dockTimer);
+                this._dockTimer = null;
+            }
             if (!this._springControls) return;
             try { this._springControls.stop(); } catch (e) { }
             this._springControls = null;
         }
 
+        // Signed content shift for the current panel width (panel minus the in-flow toolbox).
+        _measureShift() {
+            let panelWidth = this._lastTargetWidth || 0;
+            if (this._element?.parentNode && window.windowUtils?.getBoundsWithoutFlushing) {
+                const live = window.windowUtils.getBoundsWithoutFlushing(this._element).width;
+                if (live > 0) panelWidth = live;
+            }
+            const shift = Math.max(0, panelWidth - this._measureToolboxWidth());
+            return (this._element?.hasAttribute("right-side") ? -1 : 1) * shift;
+        }
+
+        // Keyframe values at progress p, mirroring the injected stylesheet so the tween lands exactly on the rest state.
+        _keyframesAt(p, shift) {
+            const dir = this._element?.hasAttribute("right-side") ? 1 : -1;
+            const fade = 1 - Math.min(1, p * 1.5);
+            return {
+                host: { transform: `translateX(${dir * 100 * (1 - p)}%)`, opacity: String(p) },
+                toolbox: { transform: `scale(${1 - p * 0.04})`, filter: `opacity(${fade})` },
+                wrapper: { transform: `translateX(${p * shift}px)` },
+                urlbar: { opacity: String(fade) }
+            };
+        }
+
+        // Both drivers expose stop(), or a fallback close animation would outlive a reopen and tear the panel down.
+        // The host's opacity is the progress by construction, so a retarget mid-tween starts from what is on screen.
+        _currentProgress() {
+            if (this._openAnimations && this._element) {
+                const p = parseFloat(getComputedStyle(this._element).opacity);
+                if (Number.isFinite(p)) return Math.max(0, Math.min(1, p));
+            }
+            return this._openProgress;
+        }
+
         _animateOpenProgress(target, onComplete) {
+            const from = this._currentProgress();
             this._stopSpringAnimation();
+            this._setOpenProgress(from);
             const finish = () => {
+                // Rest state first, then drop the fill-forwards keyframes: same values, so nothing flashes.
                 this._setOpenProgress(target);
-                this._springControls = null;
+                this._stopSpringAnimation();
                 onComplete?.();
             };
 
-            if (window.gZenUIManager?.motion?.animate) {
-                this._springControls = window.gZenUIManager.motion.animate(
-                    this._openProgress,
-                    target,
-                    {
-                        type: "spring",
-                        stiffness: 720,
-                        damping: 47,
-                        mass: 1.2,
-                        onUpdate: latest => this._setOpenProgress(latest),
-                        onComplete: finish
-                    }
-                );
+            // Native zen-library: 280ms cubic-bezier(0.32, 0.72, 0, 1), scaled by the distance left to travel.
+            const duration = this._animationDuration() * Math.abs(target - from);
+            if (duration < 1) {
+                finish();
+                return;
+            }
+
+            // Like native, WAAPI keyframes on the panel, toolbox and content wrapper: compositor-driven, no per-frame restyle of :root.
+            const host = this._element;
+            if (host?.animate && host.parentNode) {
+                const opts = { duration, easing: `cubic-bezier(${this._animationEasing().join(", ")})`, fill: "forwards" };
+                const shift = this._measureShift();
+                const clamp = 2 / 3;
+                const frames = (key) => {
+                    const list = [{ ...this._keyframesAt(from, shift)[key], offset: 0 }];
+                    // The fade clamps at 2/3; when the segment crosses it, keep that stop so the fade stays linear to zero like native.
+                    if ((from - clamp) * (target - clamp) < 0) list.push({ ...this._keyframesAt(clamp, shift)[key], offset: (clamp - from) / (target - from) });
+                    list.push({ ...this._keyframesAt(target, shift)[key], offset: 1 });
+                    return list;
+                };
+                document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${shift}px`);
+                const anims = [host.animate(frames("host"), opts)];
+                const toolbox = document.getElementById("navigator-toolbox");
+                if (toolbox) anims.push(toolbox.animate(frames("toolbox"), opts));
+                const wrapper = document.getElementById("zen-appcontent-wrapper");
+                if (wrapper) anims.push(wrapper.animate(frames("wrapper"), opts));
+                for (const node of this._hiddenUrlbarNodes || []) {
+                    node.style.removeProperty("visibility");
+                    anims.push(node.animate(frames("urlbar"), opts));
+                }
+                this._openAnimations = anims;
+                // Caption buttons dock at 60% of an open and undock as a close starts.
+                if (target > from) {
+                    const at = duration * Math.max(0, (0.6 - from) / (target - from));
+                    this._dockTimer = setTimeout(() => { this._dockTimer = null; this._applyWindowButtonDock(1); }, at);
+                } else {
+                    this._applyWindowButtonDock(0);
+                }
+                anims[0].finished.then(() => { if (this._openAnimations === anims) finish(); }, () => { });
                 return;
             }
 
             const start = this._openProgress;
             const startTime = performance.now();
-            const duration = 180;
+            let stopped = false;
+            this._springControls = { stop: () => { stopped = true; } };
             const step = (now) => {
+                if (stopped) return;
                 const t = Math.min(1, (now - startTime) / duration);
                 const eased = 1 - Math.pow(1 - t, 3);
                 this._setOpenProgress(start + (target - start) * eased);
@@ -2096,10 +2060,6 @@
                 try { Services.prefs.removeObserver("zen.library.button.show", this._buttonPrefObserver); } catch (e) { }
                 this._buttonPrefObserver = null;
             }
-            if (this._rightSidePrefObserver) {
-                try { Services.prefs.removeObserver("zen.tabs.vertical.right-side", this._rightSidePrefObserver); } catch (e) { }
-                this._rightSidePrefObserver = null;
-            }
             if (this._sidebarModePrefObserver) {
                 try { Services.prefs.removeObserver("zen.view.compact.hide-tabbar", this._sidebarModePrefObserver); } catch (e) { }
                 try { Services.prefs.removeObserver("zen.view.use-single-toolbar", this._sidebarModePrefObserver); } catch (e) { }
@@ -2113,6 +2073,7 @@
                 cancelAnimationFrame(this._sidebarModeSyncFrame);
                 this._sidebarModeSyncFrame = 0;
             }
+            this._unwatchPanelSize();
 
             this._stopSpringAnimation();
             try { this._restoreWindowButtons(); } catch (e) { }
@@ -2180,7 +2141,7 @@
                 return;
             }
             if (this._element?.parentNode) {
-                // Reopen mid-close: the spring is still running, so just retarget it.
+                // Reopen mid-close: the tween is still running, so just retarget it.
                 this._closeUrlbar();
                 this._isOpen = true;
                 this._isTransitioning = true;
@@ -2218,15 +2179,15 @@
             this._element.style.display = "block";
             this._element.style.visibility = "visible";
             this._element.style.opacity = "";
+            this._applyAnimationSettings(this._element);
             this._setOpenProgress(0);
 
             if (isRightSide) b.append(this._element);
             else b.prepend(this._element);
+            this._watchPanelSize(this._element);
 
             this._syncLibraryOpenModeAttributes();
             try { document.getElementById("zen-library-button")?.setAttribute("library-open", "true"); } catch (e) { }
-
-            requestAnimationFrame(() => requestAnimationFrame(() => this._element?.update()));
 
             this._animateOpenProgress(1, () => {
                 this._isTransitioning = false;
@@ -2250,11 +2211,13 @@
             el.classList.add("closing");
 
             const end = () => {
+                // A reopen retargets the spring; its completion must not tear down a panel that is open again.
+                if (this._isOpen && this._element === el) return;
                 // Caption buttons are a light-DOM child of this host while adopted.
                 // Put them back before the host is dropped, or they leave the document.
                 try { this._restoreWindowButtons(); } catch (e) { }
-                // In-flow layout: drop the element the moment the spring lands so
-                // the browser snaps back with no lingering (even hidden) box.
+                this._unwatchPanelSize();
+                // Drop the element the moment the tween lands so no hidden box lingers in #browser.
                 if (el.parentNode) el.remove();
                 if (this._element === el) this._element = null;
 
@@ -2278,15 +2241,12 @@
             this._animateOpenProgress(0, end);
         }
 
-        _windowControlsForcedLeft() {
-            try {
-                return Services.prefs.getBoolPref(
-                    "zen.view.experimental-force-window-controls-left",
-                    false
-                );
-            } catch (e) {
-                return false;
-            }
+        // Zen parks the caption cluster in #navigator-toolbox whenever !isWindowsStyledButtons (macOS, GTK reversed, force-left pref).
+        _windowButtonsInToolbox() {
+            // Once adopted the node lives in this host, so keep answering yes until progress drops below the dock point.
+            if (this._windowButtonsAdopted) return true;
+            const real = window.gZenVerticalTabsManager?.actualWindowButtons;
+            return !!real?.closest?.("#navigator-toolbox");
         }
 
         // Move the live caption cluster into the Library sidebar. The original
@@ -2296,7 +2256,6 @@
         _adoptWindowButtons() {
             try {
                 if (this._windowButtonsAdopted) return;
-                if (!this._windowControlsForcedLeft()) return;
                 const real = window.gZenVerticalTabsManager?.actualWindowButtons;
                 const host = this._element;
                 if (!real || !host || !real.parentNode) return;

@@ -244,11 +244,10 @@
 
             newExport.addEventListener("command", async () => {
                 const mgr = this._getManager();
-                if (!mgr) return;
-                const stored = mgr.loadBoostFromStore?.(domain, boost.id) || boost;
-                const boostData = stored?.boostEntry?.boostData || boost.boostEntry?.boostData;
-                const success = boostData && await mgr.exportBoost(window, boostData);
-                if (success) {
+                // boost.boostEntry is the manager's own entry object; nothing fresher to load.
+                const boostData = boost.boostEntry?.boostData;
+                if (!mgr || !boostData) return;
+                if (await mgr.exportBoost(window, boostData)) {
                     window.gZenUIManager?.showToast?.("zen-panel-ui-boosts-exported-message");
                 }
             });
@@ -387,10 +386,11 @@
             this._container.appendChild(fragment);
         }
 
+        // openBoostWindow reads boost.domain and closes on the next TabSelect, so load the store shape and open the Glance first.
         openBoostWithEditor(domain, boost) {
             const mgr = this._getManager();
-            const url = `https://${domain}`;
-            const spec = window.ZenLibraryUtil.safeExternalUrl(url);
+            // [audit] SEC-2 — `domain` is stored data: validated, then loaded with a null principal.
+            const spec = window.ZenLibraryUtil.safeExternalUrl(`https://${domain}`);
             if (!mgr || !spec) return;
 
             try {
@@ -402,13 +402,13 @@
                         clientY: window.innerHeight / 2 - tabPanelRect.top,
                         width: 0,
                         height: 0,
-                        triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()
+                        triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({})
                     });
                 } else if (!window.ZenLibraryUtil.openExternal(window, spec)) {
                     return;
                 }
-                const uri = Services.io.newURI(spec);
-                mgr.openBoostWindow(window, boost, uri);
+                const stored = mgr.loadBoostFromStore(domain, boost.id);
+                mgr.openBoostWindow(window, stored, Services.io.newURI(spec));
             } catch (e) {
                 console.error("[ZenLibrary Boosts] Failed to open boost editor:", e);
             }

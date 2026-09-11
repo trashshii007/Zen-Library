@@ -60,71 +60,6 @@
     pointer-events: auto;
 }
 
-.history-filter-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0 14px 12px;
-    box-sizing: border-box;
-    min-width: 0;
-}
-
-.history-filter-group {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    overflow-x: auto;
-    scrollbar-width: none;
-}
-
-.history-filter-group::-webkit-scrollbar {
-    display: none;
-}
-
-.history-filter-chip,
-.history-sort-select {
-    -moz-window-dragging: no-drag;
-    height: 30px;
-    border: 1px solid transparent;
-    border-radius: 12px;
-    background: var(--zen-library-hover-bg, rgba(255, 255, 255, 0.08));
-    color: var(--ws-text-color, inherit);
-    font: inherit;
-    font-size: 11px;
-    font-weight: 650;
-    opacity: 0.72;
-    transition: background 0.16s var(--zen-library-easing), opacity 0.16s var(--zen-library-easing), border-color 0.16s var(--zen-library-easing);
-}
-
-.history-filter-chip {
-    padding: 0 12px;
-    white-space: nowrap;
-    cursor: pointer;
-}
-
-.history-filter-chip:hover,
-.history-sort-select:hover {
-    opacity: 0.95;
-    border-color: color-mix(in srgb, currentColor 18%, transparent);
-}
-
-.history-filter-chip[active] {
-    opacity: 1;
-    background: light-dark(
-        color-mix(in srgb, var(--zen-primary-color) 24%, transparent),
-        color-mix(in srgb, var(--zen-primary-color) 38%, transparent)
-    );
-    border-color: transparent;
-}
-
-.history-sort-select {
-    flex: 0 0 auto;
-    max-width: 124px;
-    padding: 0 10px;
-    cursor: pointer;
-}
-
 :host([active-tab="history"]) .library-list-container {
     padding-top: 2px;
 }
@@ -211,6 +146,9 @@
 }
 
 .history-back-button {
+    position: relative;
+    z-index: 1;
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -279,8 +217,7 @@
 }
 
 .library-list-item:hover .history-row-actions,
-.library-list-item:focus-within .history-row-actions,
-.library-list-item[menu-open] .history-row-actions {
+.library-list-item:focus-within .history-row-actions {
     display: flex;
 }
 

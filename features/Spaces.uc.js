@@ -8,13 +8,13 @@
         static getWorkspaces() { return window.gZenWorkspaces ? window.gZenWorkspaces.getWorkspaces() : []; }
 
         static calculatePanelWidth(count) {
-            // sidebar (160) + grid padding (40) + cards + gaps + create-button (36 + 2 margin)
-            const total = 160 + 50 + (count * this.CARD_WIDTH) + (count * this.CARD_GAP) + 38;
+            // sidebar (84) + grid padding (50) + cards + gaps + create-button (36 + 2 margin)
+            const total = 84 + 50 + (count * this.CARD_WIDTH) + (count * this.CARD_GAP) + 38;
             return Math.min(total, window.innerWidth * 0.8);
         }
 
         static calculateMediaColumns(width) {
-            const sidebar = 160;
+            const sidebar = 84;
             const padding = 36;
             const colWidth = 210;
             const gap = 16;
@@ -25,7 +25,7 @@
         }
 
         static calculateMediaWidth(count) {
-            const sidebar = 160;
+            const sidebar = 84;
             const padding = 36;
             const colWidth = 210;
             const gap = 16;
@@ -42,14 +42,12 @@
         static getData() {
             const workspaces = this.getWorkspaces();
             const width = this.calculatePanelWidth(workspaces.length);
-            this._lastWidth = width;
             return { workspaces, width };
         }
 
         constructor(library) {
             this.library = library;
-            // Mirrors folder.collapsed so a card repaint can restore chevrons
-            // without re-reading every group. Native collapsed is the source of truth.
+            // Mirrors folder.collapsed so a card repaint can restore folder icons; native collapsed is the source of truth.
             this._folderExpansion = new Map();
         }
 
@@ -269,6 +267,7 @@
 
                 menuBtn.addEventListener("click", (e) => {
                     e.stopPropagation();
+                    // Zen resolves the space from the trigger event's closest toolbarbutton[zen-workspace-id].
                     const nativePopup = document.getElementById("zenWorkspaceMoreActions");
                     if (nativePopup) {
                         nativePopup.openPopup(menuBtn, "after_end", 0, 4, true, false, e);
@@ -1950,6 +1949,7 @@
             // unpinned tabs.
             const separator = this.createWorkspaceSeparator(wsId);
             if (items.length === pinnedCount) separator.setAttribute("no-unpinned", "true");
+            if (pinnedCount === 0) separator.setAttribute("no-pinned", "true");
 
             const unpinned = this.el("div", { className: "library-workspace-unpinned-section" });
             unpinned.appendChild(this.el("div", { className: "library-workspace-unpinned-mask" }));
@@ -2029,17 +2029,11 @@
             unloadItem.id = "zen-library-workspace-menu-unload";
             unloadItem.setAttribute("label", "Unload Space");
 
-            const nativeItem = document.createXULElement("menuitem");
-            nativeItem.id = "zen-library-workspace-menu-native-actions";
-            nativeItem.setAttribute("label", "More Space Actions");
-
             popup.appendChild(renameItem);
             popup.appendChild(iconItem);
             popup.appendChild(themeItem);
             popup.appendChild(document.createXULElement("menuseparator"));
             popup.appendChild(unloadItem);
-            popup.appendChild(document.createXULElement("menuseparator"));
-            popup.appendChild(nativeItem);
             document.getElementById("mainPopupSet")?.appendChild(popup) || document.body.appendChild(popup);
         }
 
@@ -2052,31 +2046,21 @@
             const iconItem = document.getElementById("zen-library-workspace-menu-icon");
             const themeItem = document.getElementById("zen-library-workspace-menu-theme");
             const unloadItem = document.getElementById("zen-library-workspace-menu-unload");
-            const nativeItem = document.getElementById("zen-library-workspace-menu-native-actions");
 
             const newRename = renameItem.cloneNode(true);
             const newIcon = iconItem.cloneNode(true);
             const newTheme = themeItem.cloneNode(true);
             const newUnload = unloadItem.cloneNode(true);
-            const newNative = nativeItem.cloneNode(true);
 
             renameItem.replaceWith(newRename);
             iconItem.replaceWith(newIcon);
             themeItem.replaceWith(newTheme);
             unloadItem.replaceWith(newUnload);
-            nativeItem.replaceWith(newNative);
 
             newRename.addEventListener("command", () => this.renameWorkspace(ws));
             newIcon.addEventListener("command", () => this.changeWorkspaceIcon(ws, this.getWorkspaceIconAnchor(ws) || button));
             newTheme.addEventListener("command", (event) => this.editWorkspaceTheme(ws, event));
             newUnload.addEventListener("command", () => this.unloadWorkspace(ws));
-            newNative.hidden = !document.getElementById("zenWorkspaceMoreActions");
-            newNative.addEventListener("command", () => {
-                const nativePopup = document.getElementById("zenWorkspaceMoreActions");
-                if (!nativePopup) return;
-                button.setAttribute("zen-workspace-id", ws.uuid);
-                nativePopup.openPopup(button, "after_end", 0, 4, true, false);
-            });
 
             popup.openPopup(button, "after_end", 0, 4, true, false);
         }
@@ -2147,37 +2131,19 @@
         changeWorkspaceIcon(ws, anchor) {
             if (!window.gZenEmojiPicker) return;
 
-            let selectedViaCallback = false;
-            const applyIcon = async (emoji) => {
-                selectedViaCallback = true;
-                // If emoji is null or empty, it means "delete icon" was pressed
+            // Close on select: saving rebuilds the grid, which removes the anchor and hides the panel anyway.
+            window.gZenEmojiPicker.open(anchor, {
+                allowNone: !!window.gZenWorkspaces?.workspaceHasIcon?.(ws)
+            })?.then?.(async (emoji) => {
                 ws.icon = emoji || "";
                 if (window.gZenWorkspaces?.saveWorkspace) {
                     await window.gZenWorkspaces.saveWorkspace(ws);
-                    if (this.library.update) this.library.update();
+                    this.library.update?.();
                 }
-            };
-
-            try {
-                const result = window.gZenEmojiPicker.open(anchor, {
-                    allowNone: window.gZenWorkspaces?.workspaceHasIcon?.(ws),
-                    closeOnSelect: false,
-                    onSelect: applyIcon
-                });
-                result?.then?.((emoji) => {
-                    if (!selectedViaCallback) applyIcon(emoji);
-                }).catch(() => { });
-            } catch (e) { }
+            }).catch(() => { }); // Rejects when the picker closes without a selection
         }
 
         async editWorkspaceTheme(ws, e) {
-            if (window.gZenThemePicker?.openThemePickerForWorkspace) {
-                try {
-                    window.gZenThemePicker.openThemePickerForWorkspace(ws, e?.currentTarget || e?.target, e);
-                    return;
-                } catch (error) { }
-            }
-
             // Close the library first to return focus to the main window
             if (window.gZenLibrary?.close) {
                 window.gZenLibrary.close();
