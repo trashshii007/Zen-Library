@@ -11,7 +11,6 @@
     "size": "12px",
     "margin": "0 0 6px 0"
   },
-
   {
     "type": "separator",
     "label": "Toolbar button",
@@ -29,7 +28,6 @@
     "size": "12px",
     "margin": "0 0 8px 0"
   },
-
   {
     "type": "separator",
     "label": "Shortcuts",
@@ -52,5 +50,57 @@
     "property": "zen.library.shortcut.downloads",
     "label": "Ctrl+J (Cmd+J on macOS) opens the Library's Downloads",
     "defaultValue": true
+  },
+  {
+    "type": "separator",
+    "label": "Animation",
+    "margin": "20px 0 10px 0"
+  },
+  {
+    "type": "text",
+    "label": "Defaults match Zen's native library (280 ms, cubic-bezier(0.32, 0.72, 0, 1)). Lower the duration or pick Snappy for a quicker feel. Applies the next time the panel opens.",
+    "size": "12px",
+    "margin": "0 0 8px 0"
+  },
+  {
+    "type": "string",
+    "property": "zen.library.animation.duration",
+    "label": "Open/close duration (ms)",
+    "defaultValue": 280,
+    "value": "number",
+    "placeholder": "280"
+  },
+  {
+    "type": "dropdown",
+    "property": "zen.library.animation.easing",
+    "label": "Easing",
+    "defaultValue": "native",
+    "placeholder": "Select an option",
+    "options": [
+      {
+        "label": "Native — cubic-bezier(0.32, 0.72, 0, 1)",
+        "value": "native"
+      },
+      {
+        "label": "Snappy — cubic-bezier(0.2, 0, 0, 1)",
+        "value": "snappy"
+      },
+      {
+        "label": "Smooth — cubic-bezier(0.25, 1, 0.5, 1)",
+        "value": "smooth"
+      },
+      {
+        "label": "Linear",
+        "value": "linear"
+      }
+    ]
+  },
+  {
+    "type": "string",
+    "property": "zen.library.animation.width-duration",
+    "label": "Section width change (ms)",
+    "defaultValue": 150,
+    "value": "number",
+    "placeholder": "150"
   }
 ]

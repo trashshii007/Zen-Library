@@ -12,8 +12,8 @@
 .view-switcher-container {
     display: flex;
     align-items: center;
-    padding: 4px 16px;
-    margin-bottom: 4px;
+    padding: 6px 16px;
+    margin-bottom: 6px;
     gap: 8px;
     cursor: pointer;
     font-size: 11px;
@@ -60,6 +60,20 @@
     pointer-events: auto;
 }
 
+:host([active-tab="history"]) .library-list-container {
+    padding-top: 2px;
+}
+
+:host([active-tab="history"]) .library-list-item .item-icon-container {
+    width: 26px;
+    height: 26px;
+}
+
+:host([active-tab="history"]) .library-list-item .item-icon {
+    width: 18px;
+    height: 18px;
+}
+
 .library-list-wrapper:has(.history-pane) .library-list-panes {
     width: 100%;
 }
@@ -75,7 +89,7 @@
     padding: 0 8px;
     height: 40px;
     cursor: pointer;
-    transition: all 0.2s var(--zen-library-easing);
+    transition: opacity 0.25s ease, transform 0.25s var(--zen-library-easing), background 0.2s var(--zen-library-easing);
     border-radius: var(--border-radius-medium);
     margin: 0 8px;
     color: var(--ws-text-color);
@@ -85,6 +99,22 @@
 
 .history-nav-item:hover {
     background: var(--zen-library-hover-bg, rgba(255, 255, 255, 0.08));
+}
+
+/* Filter-open effect for the subsection buttons: a staggered nudge that keeps
+   them fully visible and clickable. (A previous pass faded them to opacity 0
+   here, which read as the buttons going missing while their space stayed.) */
+.library-header:has(.zen-library-search-top[open]) + .library-content .history-nav-item {
+    opacity: 0.55;
+    transform: translateX(-6px);
+}
+
+.history-nav-item:nth-child(2) {
+    transition-delay: 0.03s;
+}
+
+.history-nav-item:nth-child(3) {
+    transition-delay: 0.06s;
 }
 
 .history-nav-item .nav-icon {
@@ -116,6 +146,9 @@
 }
 
 .history-back-button {
+    position: relative;
+    z-index: 1;
+    flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -155,7 +188,7 @@
 }
 
 .history-section-header {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -176,6 +209,54 @@
 
 .empty-icon.history-icon {
     mask-image: url("chrome://browser/skin/history.svg");
+}
+
+.history-row-actions {
+    display: none;
+    gap: 4px;
+}
+
+.library-list-item:hover .history-row-actions,
+.library-list-item:focus-within .history-row-actions {
+    display: flex;
+}
+
+.history-row-action {
+    width: 28px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: var(--border-radius-medium, 8px);
+    background: transparent;
+    color: inherit;
+    opacity: 0.8;
+    cursor: pointer;
+}
+
+.history-row-action:hover {
+    opacity: 1;
+    background: var(--tab-hover-background-color, color-mix(in srgb, currentColor 12%, transparent));
+}
+
+.history-row-action::before {
+    content: "";
+    display: block;
+    width: 16px;
+    height: 16px;
+    margin: 6px;
+    background-color: currentColor;
+    mask-size: contain;
+    mask-repeat: no-repeat;
+    mask-position: center;
+}
+
+.history-row-remove::before {
+    mask-image: url("chrome://global/skin/icons/delete.svg");
+}
+
+.history-row-reopen::before {
+    mask-image: url("chrome://browser/skin/zen-icons/reload.svg");
 }
 
 @media (prefers-color-scheme: dark) {

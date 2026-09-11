@@ -258,9 +258,18 @@
             if (this.media && typeof this.media._stopCurrentAudio === "function") {
                 this.media._stopCurrentAudio();
             }
+            // Leaving History collapses its filter panel, so returning never
+            // lands on a stale open filter state.
+            if (this._activeTab === "history") {
+                this.history?.resetControls?.();
+            }
             this._activeTab = val;
-            if (window.gZenLibrary) window.gZenLibrary.lastActiveTab = val;
+            if (window.gZenLibrary) {
+                window.gZenLibrary.lastActiveTab = val;
+                window.gZenLibrary._writeLastActiveTab?.(val);
+            }
             this.setAttribute("active-tab", val);
+            this.style.setProperty("--zen-library-filter-height", "0px");
             this.update();
         }
 
@@ -297,8 +306,14 @@
                     const sidebar = document.createElement("div");
                     sidebar.id = "zen-library-sidebar-container";
 
+                    // Light-DOM slot so Firefox's caption-button CSS (max vs restore
+                    // on sizemode) still applies. The real .titlebar-buttonbox-container
+                    // is assigned here while the Library is open; it is never cloned.
                     const sidebarTop = document.createElement("div");
                     sidebarTop.className = "zen-library-sidebar-top";
+                    const windowButtonSlot = document.createElement("slot");
+                    windowButtonSlot.name = "window-buttons";
+                    sidebarTop.appendChild(windowButtonSlot);
                     sidebar.appendChild(sidebarTop);
 
                     const sidebarItemsContainer = document.createElement("div");
@@ -321,7 +336,7 @@
       <stop offset="1" style="stop-color: rgb(0, 0, 0)"/>
     </linearGradient>
   </defs>
-  
+
   <!--Circle-->
   <g class="zen-downloads-circle-translate" style="transform-origin: 64px 64px;">
     <circle class="zen-downloads-bg" cx="64" cy="64" r="47.5"
@@ -353,32 +368,32 @@
   <!-- Box (Back card) -->
   <g class="zen-history-body-translate" style="transform-origin: 0 0; transform: translate(63.977px, 79.047px);">
     <g transform="translate(-39.867, -30.328)">
-      <path class="zen-history-bg" 
-            d="M 3.55 0 L 76.184 0 L 76.184 46.856 A 10.25 10.25 0 0 1 65.934 57.106 L 13.8 57.106 A 10.25 10.25 0 0 1 3.55 46.856 Z" 
+      <path class="zen-history-bg"
+            d="M 3.55 0 L 76.184 0 L 76.184 46.856 A 10.25 10.25 0 0 1 65.934 57.106 L 13.8 57.106 A 10.25 10.25 0 0 1 3.55 46.856 Z"
             style="fill: var(--zen-folder-front-bgcolor); fill-opacity: 0;" />
-      <path class="zen-history-gradient" 
-            d="M 3.55 0 L 76.184 0 L 76.184 46.856 A 10.25 10.25 0 0 1 65.934 57.106 L 13.8 57.106 A 10.25 10.25 0 0 1 3.55 46.856 Z" 
+      <path class="zen-history-gradient"
+            d="M 3.55 0 L 76.184 0 L 76.184 46.856 A 10.25 10.25 0 0 1 65.934 57.106 L 13.8 57.106 A 10.25 10.25 0 0 1 3.55 46.856 Z"
             style="fill: url(#zen-history-grad-front); fill-opacity: 0;" />
-      <path class="zen-history-border" 
-            d="M 3.55 0 L 76.184 0 L 76.184 46.856 A 10.25 10.25 0 0 1 65.934 57.106 L 13.8 57.106 A 10.25 10.25 0 0 1 3.55 46.856 Z" 
+      <path class="zen-history-border"
+            d="M 3.55 0 L 76.184 0 L 76.184 46.856 A 10.25 10.25 0 0 1 65.934 57.106 L 13.8 57.106 A 10.25 10.25 0 0 1 3.55 46.856 Z"
             style="fill: none; stroke: var(--zen-folder-stroke); stroke-width: 7.1px;" />
     </g>
   </g>
 
   <!-- Top Lid (Front card) - Keyframes Merged -->
   <g class="zen-history-lid" style="transform-origin: 0 0; transform: translate(63.977px, 37.148px) rotate(0deg) translate(-46.852px, -12.82px);">
-    <rect class="zen-history-bg" x="3.55" y="3.55" width="86.603" height="18.541" rx="6.05" 
+    <rect class="zen-history-bg" x="3.55" y="3.55" width="86.603" height="18.541" rx="6.05"
           style="fill: var(--zen-folder-front-bgcolor); fill-opacity: 0;" />
-    <rect class="zen-history-gradient" x="3.55" y="3.55" width="86.603" height="18.541" rx="6.05" 
+    <rect class="zen-history-gradient" x="3.55" y="3.55" width="86.603" height="18.541" rx="6.05"
           style="fill: url(#zen-history-grad-front); fill-opacity: 0;" />
-    <rect class="zen-history-border" x="3.55" y="3.55" width="86.603" height="18.541" rx="6.05" 
+    <rect class="zen-history-border" x="3.55" y="3.55" width="86.603" height="18.541" rx="6.05"
           style="fill: none; stroke: var(--zen-folder-stroke); stroke-width: 7.1px;" />
   </g>
 
   <!-- Dash (path) -->
   <g class="zen-history-dash-translate" style="transform-origin: 0 0; transform: translate(64px, 65px) scale(0.9, 1);">
     <path class="zen-history-dash-path" fill="none"
-          d="M -16 0 L 16 0" 
+          d="M -16 0 L 16 0"
           style="stroke: var(--zen-folder-stroke); stroke-width: 8px; stroke-linecap: round; stroke-linejoin: round;" />
   </g>
 </svg>`;
@@ -410,33 +425,33 @@
   <!-- Wrapped in an untransformed group so the mask coordinates align globally (same as spaces) -->
   <g class="zen-media-back-wrapper" mask="url(#zen-media-mask)">
     <g class="zen-media-back-card" transform="translate(54.799, 57.743) rotate(-7) translate(-46.27, -36.445)">
-      <rect class="zen-media-bg" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262" 
+      <rect class="zen-media-bg" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262"
             style="fill: var(--zen-folder-front-bgcolor); fill-opacity: 0;" />
-      <rect class="zen-media-gradient" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262" 
+      <rect class="zen-media-gradient" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262"
             style="fill: url(#zen-media-grad-back); fill-opacity: 0;" />
-      <rect class="zen-media-border" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262" 
+      <rect class="zen-media-border" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262"
             style="fill: none; stroke: var(--zen-folder-stroke); stroke-width: 7.1px;" />
     </g>
   </g>
 
   <!-- Front card (rect) -->
   <g class="zen-media-front-card" transform="translate(78.827, 77.737) translate(-46.27, -36.445)">
-    <rect class="zen-media-bg" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262" 
+    <rect class="zen-media-bg" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262"
           style="fill: var(--zen-folder-front-bgcolor); fill-opacity: 0;" />
-    <rect class="zen-media-gradient" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262" 
+    <rect class="zen-media-gradient" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262"
           style="fill: url(#zen-media-grad-front); fill-opacity: 0;" />
     <!--Mountain (path)-->
     <g class="zen-media-mountain" transform="translate(0.289, 32.609)">
-      <path class="zen-media-mountain-path" d="M7.432 21.147 L17.865 12.11 C19.665 10.596 21.373 9.862 23.173 9.862 C25.158 9.862 27.005 10.596 28.805 12.202 L36.191 18.853 L54.84 2.431 C56.779 0.734 58.81 0 61.072 0 C63.334 0 65.55 0.826 67.35 2.477 L84.568 18.67 L92 25.78 C92 35.23 87.153 40 77.551 40 L14.495 40 C4.801 40 0 35.275 0 25.78 Z" 
+      <path class="zen-media-mountain-path" d="M7.432 21.147 L17.865 12.11 C19.665 10.596 21.373 9.862 23.173 9.862 C25.158 9.862 27.005 10.596 28.805 12.202 L36.191 18.853 L54.84 2.431 C56.779 0.734 58.81 0 61.072 0 C63.334 0 65.55 0.826 67.35 2.477 L84.568 18.67 L92 25.78 C92 35.23 87.153 40 77.551 40 L14.495 40 C4.801 40 0 35.275 0 25.78 Z"
             style="fill: var(--zen-folder-stroke);" />
     </g>
-    <rect class="zen-media-border" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262" 
+    <rect class="zen-media-border" x="3.55" y="3.55" width="85.439" height="65.791" rx="9.262"
           style="fill: none; stroke: var(--zen-folder-stroke); stroke-width: 7.1px;" />
   </g>
-  
+
   <!--Sun (circle)-->
   <g class="zen-media-sun" transform="translate(64.76, 67.886) translate(-9.914, -9.984)">
-    <circle class="zen-media-sun-path" cx="9.914" cy="9.984" r="9.914" 
+    <circle class="zen-media-sun-path" cx="9.914" cy="9.984" r="9.914"
             style="fill: var(--zen-folder-stroke);" />
   </g>
 </svg>`;
@@ -464,22 +479,22 @@
   <!-- Back Card -->
   <g class="zen-spaces-back-wrapper" mask="url(#zen-spaces-mask)">
     <g class="zen-spaces-back-card" style="transform-origin: 0 0; transform: translate(51.28px, 61.69px) rotate(-17.5deg) translate(-35.022px, -44.68px);">
-      <rect class="zen-spaces-bg" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45" 
+      <rect class="zen-spaces-bg" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45"
             style="fill: var(--zen-folder-front-bgcolor); fill-opacity: 0;" />
-      <rect class="zen-spaces-gradient" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45" 
+      <rect class="zen-spaces-gradient" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45"
             style="fill: url(#zen-spaces-grad-back); fill-opacity: 0;" />
-      <rect class="zen-spaces-border" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45" 
+      <rect class="zen-spaces-border" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45"
             style="fill: none; stroke: var(--zen-folder-stroke); stroke-width: 7.1px;" />
     </g>
   </g>
 
   <!-- Front Card -->
   <g class="zen-spaces-front-card" style="transform-origin: 0 0; transform: translate(77.02px, 75.93px) rotate(0deg) translate(-35.022px, -44.68px);">
-    <rect class="zen-spaces-bg" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45" 
+    <rect class="zen-spaces-bg" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45"
           style="fill: var(--zen-folder-front-bgcolor); fill-opacity: 0;" />
-    <rect class="zen-spaces-gradient" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45" 
+    <rect class="zen-spaces-gradient" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45"
           style="fill: url(#zen-spaces-grad-front); fill-opacity: 0;" />
-    <rect class="zen-spaces-border" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45" 
+    <rect class="zen-spaces-border" x="3.55" y="3.55" width="62.94" height="82.26" rx="10.45"
           style="fill: none; stroke: var(--zen-folder-stroke); stroke-width: 7.1px;" />
   </g>
 </svg>`;
@@ -608,7 +623,10 @@
                                 if (id === "history" && this.history && this.history.resetView) {
                                     this.history.resetView();
                                 }
-                                this.update();
+                                if (id === "history" && this.history && this.history.resetControls) {
+                                    this.history.resetControls();
+                                }
+                                this.update(true);
                             }
                             else this.activeTab = id;
                         };
@@ -617,12 +635,37 @@
                     });
                     sidebar.appendChild(sidebarItemsContainer);
 
-                    const exitBtn = document.createElement("div");
-                    exitBtn.className = "sidebar-button sidebar-button-exit";
+                    const footer = document.createElement("div");
+                    footer.className = "sidebar-button-footer";
+
+                    // Native toolbarbuttons like Zen's sidebar action buttons
+                    // (#zen-expand-sidebar-button): list-style-image + context-fill,
+                    // themed by --toolbarbutton-icon-fill. The image URL lives in CSS
+                    // so it matches how Zen declares every other toolbar icon.
+                    const makeFooterButton = (title, command) => {
+                        const btn = document.createXULElement("toolbarbutton");
+                        btn.className = "toolbarbutton-1 chromeclass-toolbar-additional zen-sidebar-action-button sidebar-footer-button";
+                        // XUL tooltips read tooltiptext, not title.
+                        btn.setAttribute("tooltiptext", title);
+                        btn.setAttribute("aria-label", title);
+                        btn.addEventListener("command", command);
+                        return btn;
+                    };
+
+                    const exitBtn = makeFooterButton("Exit Library", () => window.gZenLibrary.close());
+                    exitBtn.classList.add("sidebar-button-exit");
                     exitBtn.dataset.id = "exit";
-                    exitBtn.innerHTML = `<div class="icon back-icon"></div><span class="label">Exit Library</span>`;
-                    exitBtn.onclick = () => window.gZenLibrary.close();
-                    sidebar.appendChild(exitBtn);
+
+                    const donateBtn = makeFooterButton("Donate to Zen", () => {
+                        window.openTrustedLinkIn("https://www.zen-browser.app/donate", "tab");
+                        window.gZenLibrary.close();
+                    });
+                    donateBtn.classList.add("sidebar-button-donate");
+                    donateBtn.dataset.id = "donate";
+
+                    footer.appendChild(exitBtn);
+                    footer.appendChild(donateBtn);
+                    sidebar.appendChild(footer);
                     container.appendChild(sidebar);
 
                     const panel = document.createElement("div");
@@ -644,8 +687,6 @@
                 }
                 this.setAttribute("active-tab", this.activeTab);
                 this.update();
-                this.getBoundingClientRect();
-                requestAnimationFrame(() => requestAnimationFrame(() => this.style.width = ""));
             } catch (e) {
                 console.error("ZenLibrary Error in connectedCallback:", e);
             }
@@ -657,6 +698,10 @@
             if (this._colorSchemeQuery && this._updateColors) {
                 this._colorSchemeQuery.removeEventListener("change", this._updateColors);
             }
+            // The caption cluster is a light-DOM child of this host while adopted.
+            // If the panel is torn down without going through close(), put it back
+            // before the host (and those buttons) leave the document.
+            try { window.gZenLibrary?._restoreWindowButtons(); } catch (e) { }
         }
 
         // [audit] BUG-3 — `force` is new, and its absence was a real bug rather than an
@@ -675,10 +720,9 @@
                     console.error("ZenLibrary Error: zen-library-item custom element not registered");
                     return;
                 }
-                
-                // Common width calculation
-                // We can rely on Spaces module or default fallback
-                let targetWidth = 340;
+
+                // Native zen-library: 84px sidebar + 27rem content (media/spaces size themselves). Never wider than 95vw.
+                let targetWidth = 516;
                 // Assuming ZenLibrarySpaces is available on window if Spaces module loaded
                 if (this.activeTab === "spaces" && window.ZenLibrarySpaces) {
                     const ws = window.ZenLibrarySpaces.getWorkspaces();
@@ -688,25 +732,30 @@
                     if (window.ZenLibrarySpaces && window.ZenLibrarySpaces.calculateMediaWidth) {
                         targetWidth = window.ZenLibrarySpaces.calculateMediaWidth(count);
                     } else {
-                        // Fallback logic if module missing
-                        const widthCalc = 340; // Default
-                        targetWidth = widthCalc;
+                        targetWidth = 516;
                     }
                 } else if (this.activeTab === "easels") {
-                    // Two ~160px tiles: 90 sidebar + 20 side padding + 8 gap + 320 cards.
-                    // The default 340px panel left each thumbnail around 110px wide.
-                    targetWidth = 440;
+                    // The fluid two-column grid is exact at 84 sidebar + 36 side padding + 320 cards + 18 gap.
+                    targetWidth = 458;
                 }
 
-                const startWidthStyle = this.style.getPropertyValue("--zen-library-start-width");
-                const startWidth = startWidthStyle ? parseInt(startWidthStyle) : 0;
-                const offset = targetWidth - startWidth;
+                targetWidth = Math.min(Math.max(targetWidth, 516), window.innerWidth * 0.95);
+                this._lastTargetWidth = targetWidth;
+
+                // PR shift: panel width minus the live toolbox width; measured by the controller so the tween agrees.
+                const toolboxWidth = window.gZenLibrary?._measureToolboxWidth?.() ?? 0;
+                const offset = Math.max(0, targetWidth - toolboxWidth);
 
                 this.style.setProperty("--zen-library-width", `${targetWidth}px`);
                 document.documentElement.style.setProperty("--zen-library-offset", `${offset}px`);
+                // The content shift follows the live (transitioning) width via the controller's ResizeObserver.
+                window.gZenLibrary?._syncShift?.();
 
                 for (const id in this._sidebarItemEls) {
-                    this._sidebarItemEls[id].classList.toggle("active", id === this.activeTab);
+                    const item = this._sidebarItemEls[id];
+                    const isActive = id === this.activeTab;
+                    const wasActive = item.classList.contains("active");
+                    item.classList.toggle("active", isActive);
                 }
 
                 const content = this.shadowRoot.querySelector(".library-content");
@@ -729,12 +778,11 @@
 
                 // Header / Search Bar Logic
                 if (this.activeTab !== "spaces") {
-                    if (tabChanged || !header.firstElementChild) {
+                    if (force || tabChanged || !header.firstElementChild) {
+                        // Read before the header is cleared; a forced rebuild must not wipe the field or drop focus (Easels re-renders through update(true)).
+                        const hadFocus = this.shadowRoot.activeElement?.closest?.(".library-header") != null;
                         header.innerHTML = "";
-                        let val = "";
-                        if (this.history && this.activeTab === "history") val = this.history._searchTerm;
-                        else if (this.downloads && this.activeTab === "downloads") val = this.downloads._searchTerm;
-                        else if (this.media && this.activeTab === "media") val = this.media._searchTerm;
+                        const val = this[this.activeTab]?._searchTerm || "";
 
                         // [audit] PERF-1 — the results pass is debounced. It used to run on
                         // every keystroke, and for Downloads and Media that meant a full
@@ -774,43 +822,60 @@
                                 // through update() rather than having a render call of its own.
                                 this.update(true);
                             }
-                        }, 180);
+                        }, 300);
 
-                        const searchInput = this.el("input", {
-                            type: "text",
-                            placeholder: `Search ${this.activeTab.charAt(0).toUpperCase() + this.activeTab.slice(1)}...`,
-                            value: val,
-                            oninput: (e) => {
-                                const v = e.target.value;
-                                if (this.media && typeof this.media._stopCurrentAudio === "function") {
-                                    this.media._stopCurrentAudio();
-                                }
-                                const module = this[this.activeTab];
-                                if (module) module._searchTerm = v;
-                                // A new search is a new list, so paging starts over. Without
-                                // this the first render of the results keeps however far the
-                                // previous search had been scrolled.
-                                if (this.activeTab === "downloads" && this.downloads) {
-                                    this.downloads._visibleLimit = window.ZenLibraryDownloads?.INITIAL_RENDER_LIMIT || 50;
-                                }
-                                if (this.activeTab === "media" && this.media) {
-                                    this.media._visibleLimit = window.ZenLibraryMedia?.INITIAL_RENDER_LIMIT || 36;
-                                }
-                                this._searchDebounce();
-                            }
-                        });
-                        const searchContainer = this.el("div", { className: "search-container" }, [
-                            this.el("div", { className: "search-icon-wrapper" }, [
-                                this.el("div", { className: "search-icon" })
-                            ]),
-                            searchInput
-                        ]);
-                        header.appendChild(searchContainer);
-
-                        // Support for module-specific header extensions (e.g. Media filter bar)
                         const module = this[this.activeTab];
-                        if (module && typeof module.renderFilterBar === "function") {
-                            header.appendChild(module.renderFilterBar());
+                        if (module && typeof module.renderHeaderControls === "function") {
+                            header.appendChild(module.renderHeaderControls());
+                        } else {
+                            // PR-style search header shared by every section without its
+                            // own renderHeaderControls: pill box with glass icon, same
+                            // component History uses, so all search bars sit identically.
+                            const top = this.el("div", { className: "zen-library-search-top" });
+                            const searchInput = this.el("input", {
+                                type: "search",
+                                placeholder: `Search ${this.activeTab.charAt(0).toUpperCase() + this.activeTab.slice(1)}…`,
+                                value: val,
+                                oninput: (e) => {
+                                    const v = e.target.value;
+                                    if (this.media && typeof this.media._stopCurrentAudio === "function") {
+                                        this.media._stopCurrentAudio();
+                                    }
+                                    const module = this[this.activeTab];
+                                    if (module) module._searchTerm = v;
+                                    // A new search is a new list, so paging starts over. Without
+                                    // this the first render of the results keeps however far the
+                                    // previous search had been scrolled.
+                                    if (this.activeTab === "downloads" && this.downloads) {
+                                        this.downloads._visibleLimit = window.ZenLibraryDownloads?.INITIAL_RENDER_LIMIT || 50;
+                                    }
+                                    if (this.activeTab === "media" && this.media) {
+                                        this.media._visibleLimit = window.ZenLibraryMedia?.INITIAL_RENDER_LIMIT || 36;
+                                    }
+                                    this._searchDebounce();
+                                }
+                            });
+                            top.appendChild(this.el("div", { className: "zen-library-search-header" }, [
+                                this.el("div", { className: "zen-library-search-box" }, [
+                                    this.el("img", {
+                                        src: "chrome://browser/skin/zen-icons/search-glass.svg",
+                                        alt: ""
+                                    }),
+                                    searchInput
+                                ]),
+                                typeof module?.renderFilterButton === "function" ? module.renderFilterButton() : null
+                            ]));
+                            header.appendChild(top);
+
+                            // Support for module-specific header extensions (e.g. Media filter bar)
+                            if (module && typeof module.renderFilterBar === "function") {
+                                header.appendChild(module.renderFilterBar());
+                            }
+                        }
+                        if (hadFocus) {
+                            const input = header.querySelector("input");
+                            input?.focus();
+                            try { input?.setSelectionRange(input.value.length, input.value.length); } catch (e) { }
                         }
                     }
                 } else {
@@ -948,7 +1013,7 @@
     class ZenLibrary {
         constructor() {
             this._isOpen = false;
-            this.lastActiveTab = "downloads";
+            this.lastActiveTab = this._readLastActiveTab();
             this._isTransitioning = false;
             this._lastToggleTime = 0;
             this._onKeyDown = this._onKeyDown.bind(this);
@@ -960,12 +1025,17 @@
             this._initTimer = null;
             this._buttonListener = null;
             this._buttonPrefObserver = null;
+            this._sidebarModePrefObserver = null;
+            this._sidebarModeAttrObserver = null;
+            this._sidebarModeSyncFrame = 0;
+            this._springControls = null;
+            this._openProgress = 0;
 
             // Initialize Store
             this.store = new ZenStore({
                 downloads: [],
                 history: [],
-                activeTab: 'downloads'
+                activeTab: this.lastActiveTab
             });
 
             // Persistent module instances for background pre-fetching
@@ -1012,9 +1082,47 @@
             // because the toolbar button belongs to the application, not to this window.
             window.addEventListener("unload", this._onUnload, { once: true });
 
-            if (!document.getElementById("zen-library-global-style")) {
-                const s = document.createElement("style"); s.id = "zen-library-global-style"; document.head.appendChild(s);
+            // Always (re)written: an older build left this element empty, and a Sine reload keeps it.
+            let s = document.getElementById("zen-library-global-style");
+            if (!s) {
+                s = document.createElement("style");
+                s.id = "zen-library-global-style";
+                document.head.appendChild(s);
             }
+            s.textContent = `
+:root {
+  --zen-library-progress: 0;
+  --zen-library-wrapper-target-px: 0px;
+}
+
+/* Positioning context for the panel. Relative without offsets moves
+   nothing; it only anchors any absolutely-positioned descendants. */
+#browser {
+  position: relative;
+}
+
+/* PR motion (literal): target-px carries the full signed offset and progress
+   scales it, recomputed from live geometry on every frame — no CSS
+   transition anywhere, so open and close are the same curve. */
+/* Not #urlbar: it is position:fixed (zen-omnibox.css) and already rides whichever transformed ancestor contains it. */
+:root[zen-library-open] #zen-appcontent-wrapper,
+:root[zen-library-open-compact] #zen-appcontent-wrapper {
+  transform: translateX(calc(var(--zen-library-progress, 0) * var(--zen-library-wrapper-target-px, 0px)));
+}
+
+/* filter, not opacity: a userChrome/user-sheet "opacity: 1 !important" on the toolbox beats any author rule. */
+:root[zen-library-open] #navigator-toolbox,
+:root[zen-library-open-compact] #navigator-toolbox {
+  transform: scale(calc(1 - var(--zen-library-progress) * 0.04));
+  filter: opacity(calc(1 - min(1, var(--zen-library-progress) * 1.5)));
+}
+
+/* Compact mode's toolbox is fixed at z-index 10 and slides in on mouseover; at opacity 0 it would still catch clicks over the panel. */
+:root[zen-library-open-compact] #navigator-toolbox {
+  pointer-events: none;
+}
+`;
+            this._watchSidebarMode();
 
             // CustomizableUI is not ready at script-load time on a cold start — the same
             // constraint zen-easel's host documents. Registering the widget inline throws
@@ -1234,6 +1342,74 @@
             }
         }
 
+        // Driven by the zen-right-side attribute mutation: at pref-change time Zen has not yet moved the sidebar.
+        _syncRightSidePlacement() {
+            const el = this._element;
+            if (!el?.parentNode) return;
+            const isRightSide = document.documentElement.hasAttribute("zen-right-side");
+            el.toggleAttribute("right-side", isRightSide);
+            const browser = document.getElementById("browser");
+            if (!browser) return;
+            if (isRightSide && el.parentNode.lastElementChild !== el) browser.append(el);
+            if (!isRightSide && el.parentNode.firstElementChild !== el) browser.prepend(el);
+        }
+
+        // Mirrors zen-compact-mode.css: with either pref the compact toolbox is position:fixed, hovered or not.
+        _isCompactSidebarHidden() {
+            if (document.documentElement.getAttribute("zen-compact-mode") !== "true") return false;
+            try {
+                return Services.prefs.getBoolPref("zen.view.compact.hide-tabbar", false) ||
+                    Services.prefs.getBoolPref("zen.view.use-single-toolbar", false) ||
+                    document.documentElement.hasAttribute("zen-single-toolbar");
+            } catch (e) {
+                return false;
+            }
+        }
+
+        _syncLibraryOpenModeAttributes() {
+            if (!this._isOpen && !this._isTransitioning) return;
+            const compactHidden = this._isCompactSidebarHidden();
+            // Value "true", not a bare attribute: animator.css matches [zen-library-open="true"].
+            const root = document.documentElement;
+            if (compactHidden) root.setAttribute("zen-library-open-compact", "true");
+            else root.removeAttribute("zen-library-open-compact");
+            if (compactHidden) root.removeAttribute("zen-library-open");
+            else root.setAttribute("zen-library-open", "true");
+        }
+
+        _scheduleSidebarModeSync() {
+            if (this._sidebarModeSyncFrame) return;
+            this._sidebarModeSyncFrame = requestAnimationFrame(() => {
+                this._sidebarModeSyncFrame = 0;
+                if (!this._element) return;
+                this._boxMarginCache = null;
+                this._syncRightSidePlacement();
+                this._syncLibraryOpenModeAttributes();
+                this.update(true);
+                this._setOpenProgress(this._openProgress);
+            });
+        }
+
+        // Layout-mode changes while open: root attributes Zen flips in _updateEvent, plus the prefs the CSS reads directly.
+        _watchSidebarMode() {
+            if (this._sidebarModeAttrObserver) return;
+            const sync = () => this._scheduleSidebarModeSync();
+            this._sidebarModePrefObserver = { observe: sync };
+            try { Services.prefs.addObserver("zen.view.compact.hide-tabbar", this._sidebarModePrefObserver); } catch (e) { }
+            try { Services.prefs.addObserver("zen.view.use-single-toolbar", this._sidebarModePrefObserver); } catch (e) { }
+
+            this._sidebarModeAttrObserver = new MutationObserver(sync);
+            this._sidebarModeAttrObserver.observe(document.documentElement, {
+                attributes: true,
+                attributeFilter: [
+                    "zen-compact-mode",
+                    "zen-sidebar-expanded",
+                    "zen-single-toolbar",
+                    "zen-right-side"
+                ]
+            });
+        }
+
         /**
          * Create a minimal shell object that provides the el() helper for modules
          */
@@ -1253,6 +1429,284 @@
         getModules() {
             return this._modules;
         }
+
+        _readLastActiveTab() {
+            try {
+                const tab = Services.prefs.getStringPref("zen.library.last-tab", "downloads");
+                if (["downloads", "history", "media", "easels", "spaces", "boosts"].includes(tab)) return tab;
+            } catch (e) { }
+            return "downloads";
+        }
+
+        _writeLastActiveTab(tabName) {
+            if (!["downloads", "history", "media", "easels", "spaces", "boosts"].includes(tabName)) return;
+            try {
+                Services.prefs.setStringPref("zen.library.last-tab", tabName);
+            } catch (e) { }
+        }
+
+        _closeUrlbar() {
+            try {
+                window.docShell.treeOwner.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIAppWindow).rollupAllPopups();
+            } catch (e) { }
+            try { window.gURLBar?.view?.close?.(); } catch (e) { }
+            try { window.gURLBar?.blur?.(); } catch (e) { }
+            try { document.getElementById("urlbar")?.blur?.(); } catch (e) { }
+        }
+
+        // Re-derives the content shift from the panel's live width outside a tween (section width transition, window resize).
+        _syncShift() {
+            if (this._element?.parentNode && !this._isTransitioning) this._setOpenProgress(this._openProgress);
+        }
+
+        _watchPanelSize(el) {
+            this._unwatchPanelSize();
+            this._panelResizeObserver = new ResizeObserver(() => this._syncShift());
+            this._panelResizeObserver.observe(el);
+        }
+
+        _unwatchPanelSize() {
+            this._panelResizeObserver?.disconnect();
+            this._panelResizeObserver = null;
+        }
+
+        // Animation settings from the mod's preferences page; read per open so changes apply without a restart.
+        static EASINGS = {
+            native: [0.32, 0.72, 0, 1],
+            snappy: [0.2, 0, 0, 1],
+            smooth: [0.25, 1, 0.5, 1],
+            linear: [0, 0, 1, 1]
+        };
+
+        // Sine stores "number" inputs as int prefs, but a hand-edited value may be a string; accept both.
+        _prefNumber(name, fallback) {
+            try {
+                if (Services.prefs.getPrefType(name) === Services.prefs.PREF_INT) return Services.prefs.getIntPref(name);
+                const n = Number(Services.prefs.getStringPref(name, ""));
+                return Number.isFinite(n) && n >= 0 ? n : fallback;
+            } catch (e) { return fallback; }
+        }
+
+        _animationDuration() {
+            return this._prefNumber("zen.library.animation.duration", 280);
+        }
+
+        _animationEasing() {
+            let name = "native";
+            try { name = Services.prefs.getStringPref("zen.library.animation.easing", "native"); } catch (e) { }
+            return ZenLibrary.EASINGS[name] || ZenLibrary.EASINGS.native;
+        }
+
+        _applyAnimationSettings(el) {
+            el.style.setProperty("--zen-library-width-duration", `${this._prefNumber("zen.library.animation.width-duration", 150)}ms`);
+            el.style.setProperty("--zen-library-easing", `cubic-bezier(${this._animationEasing().join(", ")})`);
+        }
+
+        // Only the pill's container: in the multi-toolbar layout #nav-bar also holds the Windows caption buttons.
+        _sweepUrlbarNodes() {
+            // #urlbar too: it is position:fixed and Zen's compact CSS re-asserts its visibility.
+            return ["urlbar-container", "urlbar"].map(id => document.getElementById(id)).filter(Boolean);
+        }
+
+        _paintUrlbarChrome(progress) {
+            const nodes = this._hiddenUrlbarNodes;
+            if (!nodes) return;
+            const faded = 1 - Math.min(1, progress * 1.5);
+            for (const node of nodes) {
+                try {
+                    node.style.setProperty("opacity", String(faded));
+                    node.style.setProperty("pointer-events", "none");
+                    if (progress >= 1) node.style.setProperty("visibility", "hidden");
+                    else node.style.removeProperty("visibility");
+                } catch (e) { }
+            }
+        }
+
+        _clearUrlbarChrome() {
+            for (const node of this._hiddenUrlbarNodes || []) {
+                try {
+                    node.style.removeProperty("opacity");
+                    node.style.removeProperty("visibility");
+                    node.style.removeProperty("pointer-events");
+                } catch (e) { }
+            }
+            this._hiddenUrlbarNodes = null;
+        }
+
+        // getComputedStyle flushes layout, so margins are read once per panel
+        // open and cached; the border box itself is still measured live.
+        _measureBoxOccupied(el) {
+            try {
+                this._boxMarginCache ||= new Map();
+                let margins = this._boxMarginCache.get(el);
+                if (margins === undefined) {
+                    margins = 0;
+                    try {
+                        const cs = getComputedStyle(el);
+                        margins = (parseFloat(cs.marginLeft) || 0) + (parseFloat(cs.marginRight) || 0);
+                    } catch (e) { }
+                    this._boxMarginCache.set(el, margins);
+                }
+                const raw = window.windowUtils?.getBoundsWithoutFlushing
+                    ? window.windowUtils.getBoundsWithoutFlushing(el).width
+                    : el.getBoundingClientRect().width;
+                return (raw || 0) + margins;
+            } catch (e) {
+                return 0;
+            }
+        }
+
+        // Live toolbox width for the PR shift; zero in compact mode, where the toolbox is fixed and out of flow.
+        _measureToolboxWidth() {
+            try {
+                const tb = document.getElementById("navigator-toolbox");
+                if (!tb || this._isCompactSidebarHidden()) return 0;
+                let width = this._measureBoxOccupied(tb);
+                if (document.documentElement.hasAttribute("zen-sidebar-expanded")) {
+                    const splitter = document.getElementById("zen-sidebar-splitter");
+                    if (splitter) width += this._measureBoxOccupied(splitter);
+                }
+                return width;
+            } catch (e) {
+                return 0;
+            }
+        }
+
+        _setOpenProgress(value) {
+            const progress = Math.max(0, Math.min(1, Number(value) || 0));
+            this._openProgress = progress;
+            document.documentElement.style.setProperty("--zen-library-progress", String(progress));
+            this._element?.style?.setProperty("--zen-library-progress", String(progress));
+            try {
+                document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${this._measureShift()}px`);
+            } catch (e) { }
+            this._applyWindowButtonDock(progress);
+            // The URL pill fades on the toolbox's curve and hides only once the tween lands.
+            this._paintUrlbarChrome(progress);
+        }
+
+        // Past 60% the live caption cluster docks here, only when it sits in the toolbox this panel fades; no clone is left behind.
+        _applyWindowButtonDock(progress) {
+            const pastPoint = progress > 0.6 && this._windowButtonsInToolbox();
+            if (pastPoint && !this._windowButtonsAdopted) this._adoptWindowButtons();
+            else if (!pastPoint && this._windowButtonsAdopted) this._restoreWindowButtons();
+        }
+
+        _stopSpringAnimation() {
+            for (const anim of this._openAnimations || []) {
+                try { anim.cancel(); } catch (e) { }
+            }
+            this._openAnimations = null;
+            if (this._dockTimer) {
+                clearTimeout(this._dockTimer);
+                this._dockTimer = null;
+            }
+            if (!this._springControls) return;
+            try { this._springControls.stop(); } catch (e) { }
+            this._springControls = null;
+        }
+
+        // Signed content shift for the current panel width (panel minus the in-flow toolbox).
+        _measureShift() {
+            let panelWidth = this._lastTargetWidth || 0;
+            if (this._element?.parentNode && window.windowUtils?.getBoundsWithoutFlushing) {
+                const live = window.windowUtils.getBoundsWithoutFlushing(this._element).width;
+                if (live > 0) panelWidth = live;
+            }
+            const shift = Math.max(0, panelWidth - this._measureToolboxWidth());
+            return (this._element?.hasAttribute("right-side") ? -1 : 1) * shift;
+        }
+
+        // Keyframe values at progress p, mirroring the injected stylesheet so the tween lands exactly on the rest state.
+        _keyframesAt(p, shift) {
+            const dir = this._element?.hasAttribute("right-side") ? 1 : -1;
+            const fade = 1 - Math.min(1, p * 1.5);
+            return {
+                host: { transform: `translateX(${dir * 100 * (1 - p)}%)`, opacity: String(p) },
+                toolbox: { transform: `scale(${1 - p * 0.04})`, filter: `opacity(${fade})` },
+                wrapper: { transform: `translateX(${p * shift}px)` },
+                urlbar: { opacity: String(fade) }
+            };
+        }
+
+        // Both drivers expose stop(), or a fallback close animation would outlive a reopen and tear the panel down.
+        // The host's opacity is the progress by construction, so a retarget mid-tween starts from what is on screen.
+        _currentProgress() {
+            if (this._openAnimations && this._element) {
+                const p = parseFloat(getComputedStyle(this._element).opacity);
+                if (Number.isFinite(p)) return Math.max(0, Math.min(1, p));
+            }
+            return this._openProgress;
+        }
+
+        _animateOpenProgress(target, onComplete) {
+            const from = this._currentProgress();
+            this._stopSpringAnimation();
+            this._setOpenProgress(from);
+            const finish = () => {
+                // Rest state first, then drop the fill-forwards keyframes: same values, so nothing flashes.
+                this._setOpenProgress(target);
+                this._stopSpringAnimation();
+                onComplete?.();
+            };
+
+            // Native zen-library: 280ms cubic-bezier(0.32, 0.72, 0, 1), scaled by the distance left to travel.
+            const duration = this._animationDuration() * Math.abs(target - from);
+            if (duration < 1) {
+                finish();
+                return;
+            }
+
+            // Like native, WAAPI keyframes on the panel, toolbox and content wrapper: compositor-driven, no per-frame restyle of :root.
+            const host = this._element;
+            if (host?.animate && host.parentNode) {
+                const opts = { duration, easing: `cubic-bezier(${this._animationEasing().join(", ")})`, fill: "forwards" };
+                const shift = this._measureShift();
+                const clamp = 2 / 3;
+                const frames = (key) => {
+                    const list = [{ ...this._keyframesAt(from, shift)[key], offset: 0 }];
+                    // The fade clamps at 2/3; when the segment crosses it, keep that stop so the fade stays linear to zero like native.
+                    if ((from - clamp) * (target - clamp) < 0) list.push({ ...this._keyframesAt(clamp, shift)[key], offset: (clamp - from) / (target - from) });
+                    list.push({ ...this._keyframesAt(target, shift)[key], offset: 1 });
+                    return list;
+                };
+                document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${shift}px`);
+                const anims = [host.animate(frames("host"), opts)];
+                const toolbox = document.getElementById("navigator-toolbox");
+                if (toolbox) anims.push(toolbox.animate(frames("toolbox"), opts));
+                const wrapper = document.getElementById("zen-appcontent-wrapper");
+                if (wrapper) anims.push(wrapper.animate(frames("wrapper"), opts));
+                for (const node of this._hiddenUrlbarNodes || []) {
+                    node.style.removeProperty("visibility");
+                    anims.push(node.animate(frames("urlbar"), opts));
+                }
+                this._openAnimations = anims;
+                // Caption buttons dock at 60% of an open and undock as a close starts.
+                if (target > from) {
+                    const at = duration * Math.max(0, (0.6 - from) / (target - from));
+                    this._dockTimer = setTimeout(() => { this._dockTimer = null; this._applyWindowButtonDock(1); }, at);
+                } else {
+                    this._applyWindowButtonDock(0);
+                }
+                anims[0].finished.then(() => { if (this._openAnimations === anims) finish(); }, () => { });
+                return;
+            }
+
+            const start = this._openProgress;
+            const startTime = performance.now();
+            let stopped = false;
+            this._springControls = { stop: () => { stopped = true; } };
+            const step = (now) => {
+                if (stopped) return;
+                const t = Math.min(1, (now - startTime) / duration);
+                const eased = 1 - Math.pow(1 - t, 3);
+                this._setOpenProgress(start + (target - start) * eased);
+                if (t < 1) requestAnimationFrame(step);
+                else finish();
+            };
+            requestAnimationFrame(step);
+        }
+
         _onKeyDown(e) {
             // This is a capture-phase listener on the window, and it claims Ctrl+H and
             // Ctrl+J below. Left unguarded it eats those keystrokes inside text fields —
@@ -1606,6 +2060,25 @@
                 try { Services.prefs.removeObserver("zen.library.button.show", this._buttonPrefObserver); } catch (e) { }
                 this._buttonPrefObserver = null;
             }
+            if (this._sidebarModePrefObserver) {
+                try { Services.prefs.removeObserver("zen.view.compact.hide-tabbar", this._sidebarModePrefObserver); } catch (e) { }
+                try { Services.prefs.removeObserver("zen.view.use-single-toolbar", this._sidebarModePrefObserver); } catch (e) { }
+                this._sidebarModePrefObserver = null;
+            }
+            if (this._sidebarModeAttrObserver) {
+                try { this._sidebarModeAttrObserver.disconnect(); } catch (e) { }
+                this._sidebarModeAttrObserver = null;
+            }
+            if (this._sidebarModeSyncFrame) {
+                cancelAnimationFrame(this._sidebarModeSyncFrame);
+                this._sidebarModeSyncFrame = 0;
+            }
+            this._unwatchPanelSize();
+
+            this._stopSpringAnimation();
+            try { this._restoreWindowButtons(); } catch (e) { }
+            try { this._clearUrlbarChrome(); } catch (e) { }
+            try { document.getElementById("zen-library-button")?.removeAttribute("library-open"); } catch (e) { }
 
             // The widget itself really is application-wide, so tearing it down because one
             // window closed would take the button away from every window still open.
@@ -1619,6 +2092,8 @@
             document.documentElement.removeAttribute("zen-library-open");
             document.documentElement.removeAttribute("zen-library-open-compact");
             document.documentElement.style.removeProperty("--zen-library-offset");
+            document.documentElement.style.removeProperty("--zen-library-progress");
+            document.documentElement.style.removeProperty("--zen-library-wrapper-target-px");
         }
         toggle() {
             const now = Date.now();
@@ -1626,15 +2101,12 @@
                 return;
             }
             this._lastToggleTime = now;
-            if (this._isTransitioning) {
-                return;
-            }
             if (this._isOpen && !document.querySelector("zen-library")) {
                 this._isOpen = false;
             }
             this._isOpen ? this.close() : this.open();
         }
-        
+
         /**
          * Open the library with a specific tab selected, or close if already on that tab
          * @param {string} tabName - One of the ids in the check below
@@ -1644,27 +2116,44 @@
             if (!tabName || !["downloads", "history", "media", "easels", "spaces", "boosts"].includes(tabName)) {
                 return;
             }
-            
+
             // If already open on the same tab, close the library
             if (this._isOpen && this._element && this._element.activeTab === tabName) {
                 this.close();
                 return;
             }
-            
+
             // Set the desired tab before opening
             this.lastActiveTab = tabName;
-            
+            this._writeLastActiveTab(tabName);
+
             // If already open but on a different tab, switch to the requested tab
             if (this._isOpen && this._element) {
                 this._element.activeTab = tabName;
                 return;
             }
-            
+
             // Otherwise, open the library (it will use lastActiveTab)
             this.open();
         }
         open() {
-            if (this._isOpen || this._isTransitioning) {
+            if (this._isOpen) {
+                return;
+            }
+            if (this._element?.parentNode) {
+                // Reopen mid-close: the tween is still running, so just retarget it.
+                this._closeUrlbar();
+                this._isOpen = true;
+                this._isTransitioning = true;
+                this._boxMarginCache = null;
+                this._hiddenUrlbarNodes = this._sweepUrlbarNodes();
+                this._element.classList.remove("closing");
+                this._element.style.visibility = "visible";
+                this._syncLibraryOpenModeAttributes();
+                try { document.getElementById("zen-library-button")?.setAttribute("library-open", "true"); } catch (e) { }
+                this._animateOpenProgress(1, () => {
+                    this._isTransitioning = false;
+                });
                 return;
             }
             const b = document.getElementById("browser");
@@ -1672,66 +2161,41 @@
                 return;
             }
 
+            this._closeUrlbar();
             this._isTransitioning = true;
             this._isOpen = true;
+            this._boxMarginCache = null;
+            this._hiddenUrlbarNodes = this._sweepUrlbarNodes();
 
             const isRightSide = document.documentElement.hasAttribute("zen-right-side");
-            let isCompactHidden = false;
-            try {
-                const isCompact = document.documentElement.hasAttribute("zen-compact-mode") && document.documentElement.getAttribute("zen-compact-mode") !== "false";
-                const isTabbarHidden = Services.prefs.getBoolPref("zen.view.compact.hide-tabbar", false);
-                const isSingleToolbar = document.documentElement.hasAttribute("zen-single-toolbar");
-                isCompactHidden = isCompact && (isTabbarHidden || isSingleToolbar);
-            } catch (e) { }
 
             this._element = document.createElement("zen-library");
             this._element.id = "zen-library-container";
             if (isRightSide) this._element.setAttribute("right-side", "true");
-            this._element.style.zIndex = "1";
+            this._element.style.zIndex = "9";
 
-            let startWidth = 0;
-            if (!isCompactHidden) {
-                const t = document.getElementById("navigator-toolbox");
-                const s = document.getElementById("zen-sidebar-splitter");
-                const sb = document.getElementById("sidebar-box");
-
-                startWidth = (t ? t.getBoundingClientRect().width : 0) +
-                    (s ? s.getBoundingClientRect().width : 0) +
-                    (sb ? sb.getBoundingClientRect().width : 0);
-
-                if (startWidth === 0) {
-                    const cssWidth = getComputedStyle(document.documentElement).getPropertyValue('--zen-sidebar-width').trim();
-                    if (cssWidth && cssWidth.endsWith('px')) {
-                        startWidth = parseInt(cssWidth);
-                    }
-                }
-            }
-
-            this._element.style.width = startWidth + "px";
-            this._element.style.setProperty("--zen-library-start-width", startWidth + "px");
+            // Overlay: no width lock, no sidebar measuring. Width comes from
+            // --zen-library-width and the shift is recomputed live every frame.
             this._element.style.display = "block";
             this._element.style.visibility = "visible";
-            this._element.style.opacity = "1";
+            this._element.style.opacity = "";
+            this._applyAnimationSettings(this._element);
+            this._setOpenProgress(0);
 
             if (isRightSide) b.append(this._element);
             else b.prepend(this._element);
-            
+            this._watchPanelSize(this._element);
 
-            if (!isCompactHidden) {
-                document.documentElement.setAttribute("zen-library-open", "true");
-            } else {
-                document.documentElement.setAttribute("zen-library-open-compact", "true");
-            }
+            this._syncLibraryOpenModeAttributes();
+            try { document.getElementById("zen-library-button")?.setAttribute("library-open", "true"); } catch (e) { }
 
-            requestAnimationFrame(() => requestAnimationFrame(() => this._element?.update()));
-
-            setTimeout(() => { 
-                this._isTransitioning = false; 
-            }, 60);
+            this._animateOpenProgress(1, () => {
+                this._isTransitioning = false;
+            });
         }
 
         close() {
-            if (!this._isOpen || !this._element || this._isTransitioning) return;
+            if (!this._isOpen || !this._element) return;
             if (this._modules.media && typeof this._modules.media._stopCurrentAudio === "function") {
                 this._modules.media._stopCurrentAudio();
             }
@@ -1746,11 +2210,14 @@
             this._isOpen = false;
             el.classList.add("closing");
 
-            const wasNormalOpen = document.documentElement.hasAttribute("zen-library-open");
-
-            document.documentElement.style.setProperty("--zen-library-offset", "0px");
-
             const end = () => {
+                // A reopen retargets the spring; its completion must not tear down a panel that is open again.
+                if (this._isOpen && this._element === el) return;
+                // Caption buttons are a light-DOM child of this host while adopted.
+                // Put them back before the host is dropped, or they leave the document.
+                try { this._restoreWindowButtons(); } catch (e) { }
+                this._unwatchPanelSize();
+                // Drop the element the moment the tween lands so no hidden box lingers in #browser.
                 if (el.parentNode) el.remove();
                 if (this._element === el) this._element = null;
 
@@ -1758,19 +2225,65 @@
                     document.documentElement.removeAttribute("zen-library-open");
                     document.documentElement.removeAttribute("zen-library-open-compact");
                     document.documentElement.style.removeProperty("--zen-library-offset");
+                    document.documentElement.style.removeProperty("--zen-library-progress");
+                    document.documentElement.style.removeProperty("--zen-library-wrapper-target-px");
                     document.documentElement.removeAttribute("zen-media-glance-active");
+                    this._boxMarginCache = null;
+                    try { this._clearUrlbarChrome(); } catch (e) { }
+                    try { document.getElementById("zen-library-button")?.removeAttribute("library-open"); } catch (e) { }
 
-                    if (wasNormalOpen) {
-                        document.documentElement.classList.add("zen-toolbox-fading-in");
-                        setTimeout(() => {
-                            if (!this._isOpen) document.documentElement.classList.remove("zen-toolbox-fading-in");
-                        }, 120);
-                    }
+                    // No extra toolbox fade: the toolbox restores with the layout,
+                    // so a second animation would double-fade it.
                     this._isTransitioning = false;
                 }
             };
 
-            setTimeout(end, 120);
+            this._animateOpenProgress(0, end);
+        }
+
+        // Zen parks the caption cluster in #navigator-toolbox whenever !isWindowsStyledButtons (macOS, GTK reversed, force-left pref).
+        _windowButtonsInToolbox() {
+            // Once adopted the node lives in this host, so keep answering yes until progress drops below the dock point.
+            if (this._windowButtonsAdopted) return true;
+            const real = window.gZenVerticalTabsManager?.actualWindowButtons;
+            return !!real?.closest?.("#navigator-toolbox");
+        }
+
+        // Move the live caption cluster into the Library sidebar. The original
+        // clone-and-leave-behind path painted a second, inert restore in the
+        // titlebar; the real node is assigned to a light-DOM slot so Firefox's
+        // sizemode CSS (max vs restore) still applies.
+        _adoptWindowButtons() {
+            try {
+                if (this._windowButtonsAdopted) return;
+                const real = window.gZenVerticalTabsManager?.actualWindowButtons;
+                const host = this._element;
+                if (!real || !host || !real.parentNode) return;
+                this._windowButtonsNext = real.nextSibling;
+                this._windowButtonsParent = real.parentNode;
+                real.setAttribute("slot", "window-buttons");
+                host.appendChild(real);
+                host.toggleAttribute("window-buttons", true);
+                this._windowButtonsAdopted = true;
+            } catch (e) { }
+        }
+
+        _restoreWindowButtons() {
+            if (!this._windowButtonsAdopted) return;
+            this._windowButtonsAdopted = false;
+            const parent = this._windowButtonsParent;
+            const next = this._windowButtonsNext;
+            this._windowButtonsParent = null;
+            this._windowButtonsNext = null;
+            try {
+                const real = window.gZenVerticalTabsManager?.actualWindowButtons;
+                const host = this._element;
+                if (host) host.removeAttribute("window-buttons");
+                if (!real) return;
+                real.removeAttribute("slot");
+                if (next && next.parentNode === parent) parent.insertBefore(real, next);
+                else if (parent && parent.isConnected) parent.appendChild(real);
+            } catch (e) { }
         }
     }
 

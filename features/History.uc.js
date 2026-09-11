@@ -16,6 +16,51 @@
             this._isFetching = false;
             this._initialized = false; // Track if data has been pre-fetched
             this._unsubscribe = null;  // [audit] BUG-2 — store subscription, released in destroy()
+            this._activeWhenFilter = "all";
+            this._activeSort = "date";
+            this._filtersOpen = false;
+            this._searchDebounce = null;
+            this._placesListener = null;
+            this._placesTimer = null;
+        }
+
+        // Visits made while the panel is open re-query Places, debounced like native's nsINavHistoryResultObserver rebuild.
+        static PLACES_EVENTS = ["page-visited", "page-removed", "page-title-changed", "history-cleared"];
+
+        _placesObservers() {
+            try {
+                return globalThis.PlacesObservers || ChromeUtils.importESModule("resource://gre/modules/PlacesUtils.sys.mjs").PlacesUtils.observers;
+            } catch (e) { return null; }
+        }
+
+        _watchPlaces() {
+            const observers = this._placesObservers();
+            if (this._placesListener || !observers) return;
+            this._placesListener = (events) => {
+                if (!this._container) return;
+                // sync() only refetches when the newest visit changed; title updates and removals never move it.
+                const refetch = events.some(e => e.type !== "page-visited");
+                clearTimeout(this._placesTimer);
+                this._placesTimer = setTimeout(() => {
+                    this._placesTimer = null;
+                    if (!this._container) return;
+                    if (refetch) this.fetchHistory().then(() => this.renderBatch(true));
+                    else this.sync();
+                }, 250);
+            };
+            try {
+                observers.addListener(ZenLibraryHistory.PLACES_EVENTS, this._placesListener);
+            } catch (e) {
+                this._placesListener = null;
+            }
+        }
+
+        _unwatchPlaces() {
+            clearTimeout(this._placesTimer);
+            this._placesTimer = null;
+            if (!this._placesListener) return;
+            try { this._placesObservers()?.removeListener(ZenLibraryHistory.PLACES_EVENTS, this._placesListener); } catch (e) { }
+            this._placesListener = null;
         }
 
         /**
@@ -43,6 +88,7 @@
                 }
                 await this.fetchHistory();
                 this._initialized = true;
+                this._watchPlaces();
             } catch (e) {
                 console.error("ZenLibrary History init error:", e);
             } finally {
@@ -52,13 +98,239 @@
 
         get el() { return this.library.el.bind(this.library); }
 
-        resetView() {
-            if (this._wrapper) {
-                this._wrapper.classList.remove("panes-shifted");
-                if (this._container) {
-                    this._container.classList.add("scrollbar-visible");
+        // Built once per section render; the filter panel and chips toggle in place so the list transition runs and the sub-pane survives.
+        renderHeaderControls() {
+            const top = this.el("div", { className: "zen-library-search-top" });
+
+            const searchInput = this.el("input", {
+                type: "search",
+                placeholder: "Search History…",
+                value: this._searchTerm,
+                oninput: (event) => this._onSearchInput(event)
+            });
+
+            const searchHeader = this.el("div", { className: "zen-library-search-header" }, [
+                this.el("div", { className: "zen-library-search-box" }, [
+                    this.el("img", {
+                        src: "chrome://browser/skin/zen-icons/search-glass.svg",
+                        alt: ""
+                    }),
+                    searchInput
+                ]),
+                this.el("button", {
+                    className: "zen-library-filter-button",
+                    onclick: (event) => {
+                        event.preventDefault();
+                        this._setFiltersOpen(true);
+                    }
+                }, [
+                    this.el("img", {
+                        src: "chrome://browser/skin/zen-icons/sliders.svg",
+                        alt: ""
+                    }),
+                    this.el("span", { textContent: "Filter" })
+                ])
+            ]);
+
+            const filterHeader = this.el("div", { className: "zen-library-filter-header" }, [
+                this.el("h2", { textContent: "Filter History…" }),
+                this.el("button", {
+                    className: "zen-library-filter-done",
+                    textContent: "Done",
+                    onclick: (event) => {
+                        event.preventDefault();
+                        this._setFiltersOpen(false);
+                    }
+                })
+            ]);
+
+            this._chipEls = [];
+            const panelInner = this.el("div", { className: "zen-library-filter-panel-inner" }, [
+                this._renderFilterGroup("when", "When was it visited?", [
+                    ["today", "Today"],
+                    ["week", "This Week"],
+                    ["month", "This Month"]
+                ]),
+                this._renderFilterGroup("sort", "Sort by", [
+                    ["date", "By Date"],
+                    ["site", "By Site"],
+                    ["mostvisited", "By Most Visited"]
+                ]),
+                this.el("div", { className: "zen-library-filter-divider" })
+            ]);
+
+            top.appendChild(searchHeader);
+            top.appendChild(filterHeader);
+            top.appendChild(this.el("div", { className: "zen-library-filter-panel" }, [panelInner]));
+
+            this._headerEls = { top, searchHeader, filterHeader, panelInner };
+            this._syncChips();
+            this._applyFiltersOpen();
+            return top;
+        }
+
+        _setFiltersOpen(open) {
+            this._filtersOpen = open;
+            this._applyFiltersOpen();
+        }
+
+        _applyFiltersOpen() {
+            const els = this._headerEls;
+            if (!els) return;
+            const open = this._filtersOpen;
+            els.top.toggleAttribute("open", open);
+            els.searchHeader.toggleAttribute("inert", open);
+            els.filterHeader.toggleAttribute("inert", !open);
+            els.panelInner.toggleAttribute("inert", !open);
+            // The shifted list is a sibling of the header, so the var lives on the host; scrollHeight needs a layout frame.
+            const host = this.library;
+            if (!open) {
+                host.style?.setProperty("--zen-library-filter-height", "0px");
+                return;
+            }
+            requestAnimationFrame(() => {
+                if (this._headerEls !== els || !this._filtersOpen) return;
+                host.style?.setProperty("--zen-library-filter-height", `${els.panelInner.scrollHeight + 8}px`);
+            });
+        }
+
+        _renderFilterGroup(groupId, title, options) {
+            return this.el("div", { className: "zen-library-filter-group" }, [
+                this.el("h3", { textContent: title }),
+                this.el("div", { className: "zen-library-filter-options" },
+                    options.map(([id, label]) => this._renderFilterChip(groupId, id, label))
+                )
+            ]);
+        }
+
+        _renderFilterChip(groupId, id, label) {
+            const chip = this.el("button", {
+                className: "zen-library-filter-chip",
+                onclick: (event) => {
+                    event.preventDefault();
+                    if (groupId === "when") this._toggleWhenFilter(id);
+                    else this._setSort(id);
+                }
+            }, [this.el("span", { textContent: label })]);
+            this._chipEls.push({ chip, groupId, id });
+            return chip;
+        }
+
+        _syncChips() {
+            for (const { chip, groupId, id } of this._chipEls || []) {
+                const active = groupId === "when" ? this._activeWhenFilter === id : this._activeSort === id;
+                chip.toggleAttribute("active", active);
+            }
+        }
+
+        _onSearchInput(event) {
+            const value = event.target.value;
+            if (this._searchDebounce) clearTimeout(this._searchDebounce);
+            this._searchDebounce = setTimeout(() => {
+                this._searchDebounce = null;
+                const query = value.trim();
+                if (query === this._searchTerm) return;
+                this._searchTerm = query;
+                this.renderBatch(true);
+            }, 300);
+        }
+
+        _toggleWhenFilter(id) {
+            this._activeWhenFilter = this._activeWhenFilter === id ? "all" : id;
+            this._syncChips();
+            this.renderBatch(true);
+        }
+
+        _setSort(id) {
+            const next = ["date", "site", "mostvisited"].includes(id) ? id : "date";
+            if (this._activeSort === next) return;
+            this._activeSort = next;
+            this._syncChips();
+            this.renderBatch(true);
+        }
+
+        _historyTimeMs(item) {
+            return (Number(item?.time) || 0) / 1000;
+        }
+
+        _whenCutoff() {
+            const now = new Date();
+            if (this._activeWhenFilter === "today") {
+                now.setHours(0, 0, 0, 0);
+                return now.getTime();
+            }
+            if (this._activeWhenFilter === "week") {
+                return Date.now() - 7 * 24 * 60 * 60 * 1000;
+            }
+            if (this._activeWhenFilter === "month") {
+                return Date.now() - 30 * 24 * 60 * 60 * 1000;
+            }
+            return 0;
+        }
+
+        // Memoised on the item: the sort comparators read the host O(n log n) times.
+        _hostLabel(item) {
+            if (item._host === undefined) {
+                try {
+                    item._host = new URL(item.uri).hostname.replace(/^www\./i, "") || "Other";
+                } catch (e) {
+                    item._host = "Other";
                 }
             }
+            return item._host;
+        }
+
+        // Cached until items, term, filter or sort change, so each loadMore() batch slices the same list.
+        _filteredAndSortedItems() {
+            const key = [this._searchTerm, this._activeWhenFilter, this._activeSort].join("\u0001");
+            const cache = this._filterCache;
+            if (cache && cache.items === this._items && cache.key === key) return cache.result;
+
+            const term = this._searchTerm.trim().toLowerCase();
+            const cutoff = this._whenCutoff();
+
+            const items = this._items.filter((item) => {
+                if (cutoff && this._historyTimeMs(item) < cutoff) return false;
+                if (!term) return true;
+                return item.title.toLowerCase().includes(term) ||
+                    item.uri.toLowerCase().includes(term) ||
+                    this._hostLabel(item).toLowerCase().includes(term);
+            });
+
+            if (this._activeSort === "site") {
+                items.sort((a, b) =>
+                    this._hostLabel(a).localeCompare(this._hostLabel(b)) ||
+                    this._historyTimeMs(b) - this._historyTimeMs(a));
+            } else if (this._activeSort === "mostvisited") {
+                // Visit counts are per host over the loaded 500-entry window, not Places' visit_count.
+                const visitCounts = new Map();
+                for (const item of this._items) {
+                    const host = this._hostLabel(item);
+                    visitCounts.set(host, (visitCounts.get(host) || 0) + 1);
+                }
+                items.sort((a, b) =>
+                    (visitCounts.get(this._hostLabel(b)) || 0) - (visitCounts.get(this._hostLabel(a)) || 0) ||
+                    this._historyTimeMs(b) - this._historyTimeMs(a));
+            } else {
+                items.sort((a, b) => this._historyTimeMs(b) - this._historyTimeMs(a));
+            }
+
+            this._filterCache = { items: this._items, key, result: items };
+            return items;
+        }
+
+        resetView() {
+            this.resetControls();
+            // Prefer the mounted wrapper: a forced section re-render can leave _wrapper pointing at a detached one.
+            const wrapper = this.library.shadowRoot?.querySelector?.(".library-content .library-list-wrapper") || this._wrapper;
+            if (wrapper) {
+                wrapper.classList.remove("panes-shifted");
+                this._container?.classList.add("scrollbar-visible");
+            }
+        }
+
+        resetControls() {
+            this._setFiltersOpen(false);
         }
 
         render() {
@@ -263,9 +535,17 @@
 
         destroy() {
             this._unsubscribeStore();
+            this._unwatchPlaces();
+            if (this._searchDebounce) {
+                clearTimeout(this._searchDebounce);
+                this._searchDebounce = null;
+            }
             this._container = null;
             this._closedWindowsContainer = null;
             this._wrapper = null;
+            this._headerEls = null;
+            this._chipEls = null;
+            this._filterCache = null;
         }
 
         async fetchHistory() {
@@ -325,12 +605,7 @@
                     this._lastGroupLabel = null;
                 }
 
-                const filtered = this._searchTerm
-                    ? this._items.filter(i =>
-                        i.title.toLowerCase().includes(this._searchTerm.toLowerCase()) ||
-                        i.uri.toLowerCase().includes(this._searchTerm.toLowerCase())
-                    )
-                    : this._items;
+                const filtered = this._filteredAndSortedItems();
 
                 if (filtered.length === 0 && !this._isLoading) {
                     if (!reset) return;
@@ -355,7 +630,9 @@
                         const timeMs = item.time / 1000;
                         let groupLabel = "";
 
-                        if (this._searchTerm) {
+                        if (this._activeSort === "site" || this._activeSort === "mostvisited") {
+                            groupLabel = this._hostLabel(item);
+                        } else if (this._searchTerm) {
                             groupLabel = "Search Results";
                         } else {
                             const d = new Date(timeMs); d.setHours(0, 0, 0, 0);
@@ -369,7 +646,10 @@
                             this._lastGroupLabel = groupLabel;
                         }
 
-                        const displayTime = (this._searchTerm || (this._lastGroupLabel !== "Today" && this._lastGroupLabel !== "Yesterday"))
+                        const displayTime = (this._searchTerm ||
+                            this._activeSort === "site" ||
+                            this._activeSort === "mostvisited" ||
+                            (this._lastGroupLabel !== "Today" && this._lastGroupLabel !== "Yesterday"))
                             ? item.dateStr : item.timeStr;
 
                         const itemEl = document.createElement('zen-library-item');
@@ -377,7 +657,7 @@
                             console.error("ZenLibrary Error: zen-library-item custom element not properly registered");
                             return;
                         }
-                        
+
                         // Set data first so status/logic can apply
                         itemEl.data = item;
 
@@ -386,19 +666,34 @@
                         itemEl.setAttribute("subtitle", item.uri);
                         itemEl.setAttribute("time", displayTime);
 
+                        const actions = this.el("div", { className: "zen-library-row-actions history-row-actions" });
+                        const removeButton = this.el("button", {
+                            className: "history-row-action history-row-remove",
+                            title: "Remove from history",
+                            onclick: (e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                this._removeHistoryItem(item, itemEl);
+                            }
+                        });
+                        const reopenButton = this.el("button", {
+                            className: "history-row-action history-row-reopen",
+                            title: "Reopen page",
+                            onclick: (e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                this._openHistoryItem(item);
+                            }
+                        });
+                        actions.appendChild(removeButton);
+                        actions.appendChild(reopenButton);
+                        itemEl.appendSecondaryAction(actions);
+
                         if (this._highlightNewerThan && item.time > this._highlightNewerThan) {
                             itemEl.classList.add("pop-in");
                         }
 
-                        itemEl.onclick = () => {
-                            // [audit] SEC-2 — was a system triggering principal on a URI read
-                            // straight out of the Places database. Places will happily store
-                            // data: and other non-web schemes, and a system principal is what
-                            // makes those load *with privilege* rather than merely load.
-                            // Validated against a scheme allowlist, then a null principal.
-                            if (!window.ZenLibraryUtil.openExternal(window, item.uri)) return;
-                            window.gZenLibrary.close();
-                        };
+                        itemEl.onclick = () => this._openHistoryItem(item);
 
                         itemEl.oncontextmenu = (e) => {
                             e.preventDefault();
@@ -422,6 +717,32 @@
         }
 
         loadMore() { if (!this._isLoading) this.renderBatch(false); }
+
+        _openHistoryItem(item) {
+            // [audit] SEC-2 — was a system triggering principal on a URI read
+            // straight out of the Places database. Places will happily store
+            // data: and other non-web schemes, and a system principal is what
+            // makes those load *with privilege* rather than merely load.
+            // Validated against a scheme allowlist, then a null principal.
+            if (!window.ZenLibraryUtil.openExternal(window, item.uri)) return;
+            window.gZenLibrary.close();
+        }
+
+        async _removeHistoryItem(item, itemEl) {
+            try {
+                const { PlacesUtils } = ChromeUtils.importESModule("resource://gre/modules/PlacesUtils.sys.mjs");
+                await PlacesUtils.history.remove(item.uri);
+                this._items = this._items.filter(i => i.uri !== item.uri);
+                if (itemEl) {
+                    itemEl.style.transition = "opacity 0.15s, transform 0.15s";
+                    itemEl.style.opacity = "0";
+                    itemEl.style.transform = "translateX(-8px)";
+                }
+                setTimeout(() => this.renderBatch(true), 160);
+            } catch (err) {
+                console.error("[ZenLibrary History] Remove history item failed:", err);
+            }
+        }
 
         _copyToClipboard(text) {
             try {
@@ -516,17 +837,7 @@
             });
 
             document.getElementById("zen-history-ctx-delete").addEventListener("command", async () => {
-                try {
-                    const { PlacesUtils } = ChromeUtils.importESModule("resource://gre/modules/PlacesUtils.sys.mjs");
-                    await PlacesUtils.history.remove(item.uri);
-                    this._items = this._items.filter(i => i.uri !== item.uri);
-                    itemEl.style.transition = "opacity 0.15s, transform 0.15s";
-                    itemEl.style.opacity = "0";
-                    itemEl.style.transform = "translateX(-8px)";
-                    setTimeout(() => this.renderBatch(true), 160);
-                } catch (err) {
-                    console.error("[ZenLibrary History] Delete failed:", err);
-                }
+                this._removeHistoryItem(item, itemEl);
             });
 
             popup.openPopupAtScreen(e.screenX, e.screenY, true);

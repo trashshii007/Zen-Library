@@ -44,7 +44,7 @@
             if (this._observer) return;
             this._observer = {
                 observe: (subject, topic) => {
-                    if (topic === "zen-boosts-update") {
+                    if (topic === "zen-boosts-update" || topic === "zen-boosts-active-change") {
                         // Re-fetch only if the panel is visible, otherwise mark stale
                         // so next render() picks up fresh data.
                         // We intentionally do NOT re-fetch on every toggle because
@@ -56,12 +56,28 @@
                 }
             };
             Services.obs.addObserver(this._observer, "zen-boosts-update");
+            Services.obs.addObserver(this._observer, "zen-boosts-active-change");
             window.addEventListener("unload", () => {
                 if (this._observer) {
                     Services.obs.removeObserver(this._observer, "zen-boosts-update");
+                    Services.obs.removeObserver(this._observer, "zen-boosts-active-change");
                     this._observer = null;
                 }
             }, { once: true });
+        }
+
+        destroy() {
+            if (this._observer) {
+                try { Services.obs.removeObserver(this._observer, "zen-boosts-update"); } catch (e) { }
+                try { Services.obs.removeObserver(this._observer, "zen-boosts-active-change"); } catch (e) { }
+                this._observer = null;
+            }
+            const popup = document.getElementById("zen-boosts-context-menu");
+            if (popup) {
+                try { popup.hidePopup(); } catch (e) { }
+                popup.remove();
+            }
+            this._container = null;
         }
 
         async fetchBoosts() {
@@ -76,6 +92,23 @@
             const seenDomains = new Set();
 
             try {
+                if (mgr.registeredDomains) {
+                    for (const [domain, entry] of mgr.registeredDomains) {
+                        if (!entry?.boostEntries) continue;
+                        const boosts = [];
+                        for (const [id, boostEntry] of entry.boostEntries) {
+                            if (!boostEntry?.boostData?.changeWasMade) continue;
+                            boosts.push({ id, boostEntry });
+                        }
+                        if (boosts.length) {
+                            results.push({ domain, boosts, activeId: entry.activeBoostId });
+                        }
+                    }
+                    results.sort((a, b) => a.domain.localeCompare(b.domain));
+                    this._items = results;
+                    return;
+                }
+
                 // Walk history to find all domains that have boosts
                 const { PlacesUtils } = ChromeUtils.importESModule(
                     "resource://gre/modules/PlacesUtils.sys.mjs"
@@ -175,50 +208,48 @@
             editItem.id = "zen-boosts-ctx-edit";
             editItem.setAttribute("label", "Edit boost");
 
-            const renameItem = document.createXULElement("menuitem");
-            renameItem.id = "zen-boosts-ctx-rename";
-            renameItem.setAttribute("label", "Rename boost");
+            const exportItem = document.createXULElement("menuitem");
+            exportItem.id = "zen-boosts-ctx-export";
+            exportItem.setAttribute("label", "Export boost");
 
             const deleteItem = document.createXULElement("menuitem");
             deleteItem.id = "zen-boosts-ctx-delete";
             deleteItem.setAttribute("label", "Delete boost");
 
-
             popup.appendChild(editItem);
-            popup.appendChild(renameItem);
+            popup.appendChild(exportItem);
             popup.appendChild(document.createXULElement("menuseparator"));
             popup.appendChild(deleteItem);
             document.getElementById("mainPopupSet")?.appendChild(popup) || document.body.appendChild(popup);
         }
 
-        _showContextMenu(event, domain, boost, onRenamed, onDeleted) {
+        _showContextMenu(event, domain, boost, row, onDeleted) {
             this._ensureContextMenu();
             const popup = document.getElementById("zen-boosts-context-menu");
             const editItem = document.getElementById("zen-boosts-ctx-edit");
-            const renameItem = document.getElementById("zen-boosts-ctx-rename");
+            const exportItem = document.getElementById("zen-boosts-ctx-export");
             const deleteItem = document.getElementById("zen-boosts-ctx-delete");
 
             // Replace listeners each time to bind correct boost
             const newEdit = editItem.cloneNode(true);
-            const newRename = renameItem.cloneNode(true);
+            const newExport = exportItem.cloneNode(true);
             const newDelete = deleteItem.cloneNode(true);
             editItem.replaceWith(newEdit);
-            renameItem.replaceWith(newRename);
+            exportItem.replaceWith(newExport);
             deleteItem.replaceWith(newDelete);
 
-            newEdit.addEventListener("command", () => this.openBoostEditor(domain, boost));
+            row?.setAttribute("menu-open", "true");
 
-            newRename.addEventListener("command", () => {
+            newEdit.addEventListener("command", () => this.openBoostWithEditor(domain, boost));
+
+            newExport.addEventListener("command", async () => {
                 const mgr = this._getManager();
-                if (!mgr) return;
-                const current = boost.boostEntry.boostData.boostName || domain;
-                const input = { value: current };
-                const ok = Services.prompt.prompt(window, "Rename Boost", null, input, null, { value: false });
-                if (!ok || !input.value.trim()) return;
-                boost.boostEntry.boostData.boostName = input.value.trim().substring(0, 30);
-                boost.boostEntry.boostData.changeWasMade = true;
-                mgr.saveBoostToStore(boost);
-                onRenamed(boost.boostEntry.boostData.boostName);
+                // boost.boostEntry is the manager's own entry object; nothing fresher to load.
+                const boostData = boost.boostEntry?.boostData;
+                if (!mgr || !boostData) return;
+                if (await mgr.exportBoost(window, boostData)) {
+                    window.gZenUIManager?.showToast?.("zen-panel-ui-boosts-exported-message");
+                }
             });
 
             newDelete.addEventListener("command", () => {
@@ -227,7 +258,7 @@
                 const boostName = boost.boostEntry.boostData.boostName || domain;
                 const confirmed = Services.prompt.confirm(window, "Delete This Boost?", `This can't be undone.`);
                 if (!confirmed) return;
-                mgr.deleteBoost(boost);
+                mgr.deleteBoost({ domain, id: boost.id });
                 // Remove from local cache and re-render
                 const entry = this._items.find(e => e.domain === domain);
                 if (entry) {
@@ -239,7 +270,8 @@
                 onDeleted();
             });
 
-            popup.openPopupAtScreen(event.screenX, event.screenY, true);
+            popup.addEventListener("popuphidden", () => row?.removeAttribute("menu-open"), { once: true });
+            popup.openPopupAtScreen(event.screenX, event.screenY, true, event);
         }
 
         renderList() {
@@ -273,6 +305,8 @@
                 // Re-fetch active ID live so toggle reflects current state
                 const activeId = mgr ? mgr.getActiveBoostId(domain) : entry.activeId;
 
+                // Per-site divider, as in the original mod (PR rows are flat and
+                // carry no grouping, but the mod groups boosts under their domain).
                 fragment.appendChild(this.el("div", {
                     className: "history-section-header",
                     textContent: domain
@@ -285,29 +319,30 @@
                     const isEnabled = mgr ? (mgr.getActiveBoostId(domain) === boostId) : (boostId === activeId);
 
                     const row = this.el("div", {
-                        className: `library-list-item boosts-item${isEnabled ? "" : " boosts-disabled"}`
+                        className: `library-list-item zen-library-row library-boost-item${isEnabled ? "" : " boosts-disabled"}`
                     });
 
                     // Favicon
-                    const iconContainer = this.el("div", { className: "item-icon-container" });
+                    const iconContainer = this.el("span", { className: "zen-library-row-icon-wrapper item-icon-container" });
                     // [audit] SEC-3 — `domain` is stored data, and this string is assigned to
                     // cssText, so an unescaped quote in it injected CSS declarations into
                     // privileged chrome rather than merely breaking a favicon.
                     iconContainer.appendChild(this.el("div", {
-                        className: "item-icon",
+                        className: "item-icon zen-library-row-icon",
                         style: `background-image: url("${window.ZenLibraryUtil.cssUrl(`page-icon:https://${domain}`)}");`
                     }));
+                    iconContainer.firstElementChild.toggleAttribute("inactive", !isEnabled);
                     row.appendChild(iconContainer);
 
                     // Name + URL
-                    const info = this.el("div", { className: "item-info" });
+                    const info = this.el("div", { className: "item-info zen-library-row-text" });
                     info.appendChild(this.el("div", {
-                        className: "item-title",
+                        className: "item-title zen-library-row-title",
                         textContent: boostData.boostName || domain
                     }));
                     info.appendChild(this.el("div", {
-                        className: "item-url",
-                        textContent: `https://${domain}`
+                        className: "item-url zen-library-row-subtitle",
+                        textContent: domain
                     }));
                     row.appendChild(info);
 
@@ -317,16 +352,13 @@
                         mgr.toggleBoostActiveForDomain(domain, boostId);
                         const nowEnabled = mgr.getActiveBoostId(domain) === boostId;
                         row.classList.toggle("boosts-disabled", !nowEnabled);
+                        iconContainer.firstElementChild.toggleAttribute("inactive", !nowEnabled);
                     });
                     row.appendChild(toggle);
 
                     row.onclick = (e) => {
                         if (e.target.closest(".boosts-toggle")) return;
-                        // [audit] SEC-2 — `domain` comes from boost storage, so the string
-                        // being navigated to is not one this code produced. Validated, then
-                        // opened with a null triggering principal rather than a system one.
-                        if (!window.ZenLibraryUtil.openExternal(window, `https://${domain}`)) return;
-                        window.gZenLibrary.close();
+                        this.openBoostWithEditor(domain, boost);
                     };
 
                     row.oncontextmenu = (e) => {
@@ -335,10 +367,7 @@
                             e,
                             domain,
                             boost,
-                            (newName) => {
-                                // Update title in place
-                                row.querySelector(".item-title").textContent = newName;
-                            },
+                            row,
                             () => {
                                 // Animate out then re-render
                                 row.style.transition = "opacity 0.15s, transform 0.15s";
@@ -357,18 +386,37 @@
             this._container.appendChild(fragment);
         }
 
-        openBoostEditor(domain, boost) {
+        // openBoostWindow reads boost.domain and closes on the next TabSelect, so load the store shape and open the Glance first.
+        openBoostWithEditor(domain, boost) {
             const mgr = this._getManager();
-            // Same validation as the navigate path: `domain` is stored data, and
-            // openBoostWindow hands the URI to canBoostSite before doing anything.
+            // [audit] SEC-2 — `domain` is stored data: validated, then loaded with a null principal.
             const spec = window.ZenLibraryUtil.safeExternalUrl(`https://${domain}`);
             if (!mgr || !spec) return;
 
-            window.gZenLibrary.close();
-            mgr.openBoostWindow(window, boost, Services.io.newURI(spec));
+            try {
+                const tabPanelRect = window.windowUtils?.getBoundsWithoutFlushing?.(window.gBrowser.tabpanels);
+                if (window.gZenGlanceManager && tabPanelRect) {
+                    window.gZenGlanceManager.openGlance({
+                        url: spec,
+                        clientX: window.innerWidth / 2 - tabPanelRect.left,
+                        clientY: window.innerHeight / 2 - tabPanelRect.top,
+                        width: 0,
+                        height: 0,
+                        triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal({})
+                    });
+                } else if (!window.ZenLibraryUtil.openExternal(window, spec)) {
+                    return;
+                }
+                const stored = mgr.loadBoostFromStore(domain, boost.id);
+                mgr.openBoostWindow(window, stored, Services.io.newURI(spec));
+            } catch (e) {
+                console.error("[ZenLibrary Boosts] Failed to open boost editor:", e);
+            }
         }
 
         _createToggle(checked, onToggle) {
+            // Original mod switch: div track + sliding thumb, no native button
+            // chrome, so it renders identically in the shadow list.
             const toggle = this.el("div", { className: "boosts-toggle no-squircles" });
             toggle.setAttribute("checked", checked ? "true" : "false");
 

@@ -13,10 +13,20 @@
             this._renderToken = 0;
             this._visibleLimit = ZenLibraryDownloads.INITIAL_RENDER_LIMIT;
             this._moreObserver = null;
+            this._activeFilter = "all";
+            this._filterLabelEl = null;
         }
 
         static INITIAL_RENDER_LIMIT = 50;
         static RENDER_BATCH_SIZE = 50;
+        // Native zen-library DOWNLOAD_FILTERS, mapped onto this module's status strings.
+        static FILTERS = [
+            { id: "all", label: "All" },
+            { id: "completed", label: "Completed", statuses: ["completed", "deleted"] },
+            { id: "in-progress", label: "In progress", statuses: ["downloading"] },
+            { id: "failed", label: "Failed", statuses: ["failed"] },
+            { id: "paused", label: "Paused", statuses: ["paused"] }
+        ];
 
         /**
          * Background initialization - called at startup to pre-fetch data
@@ -34,6 +44,59 @@
         }
 
         get el() { return this.library.el.bind(this.library); }
+
+        // Native filter button: sits beside the search box and opens a radio menupopup.
+        renderFilterButton() {
+            const active = ZenLibraryDownloads.FILTERS.find(f => f.id === this._activeFilter) || ZenLibraryDownloads.FILTERS[0];
+            this._filterLabelEl = this.el("span", { textContent: active.label });
+            const button = this.el("button", {
+                className: "zen-library-filter-button",
+                title: "Filter downloads",
+                onclick: (event) => {
+                    event.preventDefault();
+                    this._openFilterMenu(button);
+                }
+            }, [
+                this.el("img", { src: "chrome://browser/skin/zen-icons/sliders.svg", alt: "" }),
+                this._filterLabelEl
+            ]);
+            return button;
+        }
+
+        _openFilterMenu(anchor) {
+            const popup = document.createXULElement("menupopup");
+            for (const filter of ZenLibraryDownloads.FILTERS) {
+                const item = document.createXULElement("menuitem");
+                item.setAttribute("type", "radio");
+                item.setAttribute("label", filter.label);
+                if (filter.id === this._activeFilter) item.setAttribute("checked", "true");
+                item.addEventListener("command", () => this._setFilter(filter.id), { once: true });
+                popup.appendChild(item);
+            }
+            popup.addEventListener("popuphidden", () => {
+                anchor.removeAttribute("open");
+                popup.remove();
+            }, { once: true });
+            anchor.setAttribute("open", "true");
+            (document.getElementById("mainPopupSet") || document.body).appendChild(popup);
+            popup.openPopup(anchor, "after_end", 0, 4, false, false);
+        }
+
+        _setFilter(id) {
+            if (id === this._activeFilter) return;
+            this._activeFilter = id;
+            if (this._filterLabelEl) {
+                this._filterLabelEl.textContent = ZenLibraryDownloads.FILTERS.find(f => f.id === id)?.label || "All";
+            }
+            this._visibleLimit = ZenLibraryDownloads.INITIAL_RENDER_LIMIT;
+            if (this._cachedDownloads) this.renderList(this._cachedDownloads);
+            else this.fetchDownloads().then(d => { this._cachedDownloads = d; this.renderList(d); });
+        }
+
+        _matchesFilter(item) {
+            const filter = ZenLibraryDownloads.FILTERS.find(f => f.id === this._activeFilter);
+            return !filter?.statuses || filter.statuses.includes(item.status);
+        }
 
         render() {
             // Main wrapper for switcher and panes
@@ -361,6 +424,7 @@
                     const term = this._searchTerm.toLowerCase();
                     downloads = downloads.filter(d => d.filename.toLowerCase().includes(term));
                 }
+                if (this._activeFilter !== "all") downloads = downloads.filter(d => this._matchesFilter(d));
                 downloads = downloads.slice().sort((a, b) => b.timestamp - a.timestamp);
                 const visibleLimit = Math.min(this._visibleLimit || ZenLibraryDownloads.INITIAL_RENDER_LIMIT, downloads.length);
                 const visibleDownloads = downloads.slice(0, visibleLimit);
@@ -369,7 +433,7 @@
                     const emptyState = this.el("div", { className: "empty-state" }, [
                         this.el("div", { className: "empty-icon downloads-icon" }),
                         this.el("h3", { textContent: "No downloads found" }),
-                        this.el("p", { textContent: this._searchTerm ? "Try a different search term." : "Your download history is empty." })
+                        this.el("p", { textContent: this._searchTerm ? "Try a different search term." : this._activeFilter !== "all" ? "No downloads match this filter." : "Your download history is empty." })
                     ]);
                     this._container.appendChild(emptyState);
                     return;

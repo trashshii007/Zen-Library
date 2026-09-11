@@ -2,21 +2,19 @@
 
 (function () {
     class ZenLibrarySpaces {
-        static CARD_WIDTH = 224;
-        static CARD_GAP = 16;
+        static CARD_WIDTH = 242;
+        static CARD_GAP = 24;
 
         static getWorkspaces() { return window.gZenWorkspaces ? window.gZenWorkspaces.getWorkspaces() : []; }
 
         static calculatePanelWidth(count) {
-            // sidebar (90) + grid padding (40) + cards + gaps + create-button (36 + 2 margin)
-            const total = 90 + 40 + (count * this.CARD_WIDTH) + (count * this.CARD_GAP) + 38;
+            // sidebar (84) + grid padding (50) + cards + gaps + create-button (36 + 2 margin)
+            const total = 84 + 50 + (count * this.CARD_WIDTH) + (count * this.CARD_GAP) + 38;
             return Math.min(total, window.innerWidth * 0.8);
         }
 
-        static getLastWidth() { return this._lastWidth || 340; }
-
         static calculateMediaColumns(width) {
-            const sidebar = 90;
+            const sidebar = 84;
             const padding = 36;
             const colWidth = 210;
             const gap = 16;
@@ -27,7 +25,7 @@
         }
 
         static calculateMediaWidth(count) {
-            const sidebar = 90;
+            const sidebar = 84;
             const padding = 36;
             const colWidth = 210;
             const gap = 16;
@@ -44,14 +42,12 @@
         static getData() {
             const workspaces = this.getWorkspaces();
             const width = this.calculatePanelWidth(workspaces.length);
-            this._lastWidth = width;
             return { workspaces, width };
         }
 
         constructor(library) {
             this.library = library;
-            // Mirrors folder.collapsed so a card repaint can restore chevrons
-            // without re-reading every group. Native collapsed is the source of truth.
+            // Mirrors folder.collapsed so a card repaint can restore folder icons; native collapsed is the source of truth.
             this._folderExpansion = new Map();
         }
 
@@ -103,7 +99,7 @@
                     if (creationCmd) creationCmd.doCommand();
                 }
             }, [
-                this.el("span", { textContent: "+" })
+                this.el("div")
             ]));
 
             grid.appendChild(fragment);
@@ -144,17 +140,20 @@
 
         // --- Core Rendering Logic Copied from Backup ---
 
-        createFolderIconSVG(iconURL = '', state = 'close', active = false) {
-            const id1 = "nebula-native-grad-0-" + Math.floor(Math.random() * 100000);
-            const id2 = "nebula-native-grad-1-" + Math.floor(Math.random() * 100000);
+        createFolderIconSVG(iconURL = '', state = 'close', active = false, key = '') {
+            // Stable per-folder gradient IDs: identical inputs hit the svg()
+            // cache instead of growing it on every render, and equal IDs can
+            // never collide across folders the way random ones could.
+            const safeKey = String(key || 'shared').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'shared';
+            const id1 = `zlfg-${safeKey}-0`;
+            const id2 = `zlfg-${safeKey}-1`;
 
-            let imageTag = "";
-            if (iconURL) {
-                imageTag = `<image href="${iconURL}" height="10" width="10" transform="translate(9 11)" />`;
-            }
-
+            // Native nsZenFolder.rawIcon geometry (27-unit viewBox): the image
+            // carries no transform attribute — position comes from CSS, like native.
+            // Fills use the card's --zen-folder-* tokens, which follow Zen's
+            // light-dark mixes of that space's --zen-primary-color.
             const svgStr = `
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" state="${state}" active="${active}">
+            <svg width="28" height="28" viewBox="0 0 27 27" fill="none" xmlns="http://www.w3.org/2000/svg" state="${state}" active="${active}">
                 <defs>
                     <linearGradient gradientUnits="userSpaceOnUse" x1="14" y1="5.625" x2="14" y2="22.375" id="${id1}">
                         <stop offset="0" style="stop-color: rgb(255, 255, 255)"/>
@@ -165,20 +164,24 @@
                         <stop offset="1" style="stop-color: rgb(0, 0, 0)"/>
                     </linearGradient>
                 </defs>
-                <path class="back" d="M8 5.625H11.9473C12.4866 5.625 13.0105 5.80861 13.4316 6.14551L14.2881 6.83105C14.9308 7.34508 15.7298 7.625 16.5527 7.625H20C21.3117 7.625 22.375 8.68832 22.375 10V20C22.375 21.3117 21.3117 22.375 20 22.375H8C6.68832 22.375 5.625 21.3117 5.625 20V8C5.625 6.68832 6.68832 5.625 8 5.625Z" style="fill: var(--ws-folder-behind);" />
-                <path class="back" d="M8 5.625H11.9473C12.4866 5.625 13.0105 5.80861 13.4316 6.14551L14.2881 6.83105C14.9308 7.34508 15.7298 7.625 16.5527 7.625H20C21.3117 7.625 22.375 8.68832 22.375 10V20C22.375 21.3117 21.3117 22.375 20 22.375H8C6.68832 22.375 5.625 21.3117 5.625 20V8C5.625 6.68832 6.68832 5.625 8 5.625Z" style="stroke-width: 1.5px; stroke: var(--ws-folder-stroke); fill: url(#${id1}); fill-opacity: 0.1;" />
-                <rect class="front" x="5.625" y="9.625" width="16.75" height="12.75" rx="2.375" style="fill: var(--ws-folder-front);" />
-                <rect class="front" x="5.625" y="9.625" width="16.75" height="12.75" rx="2.375" style="stroke-width: 1.5px; stroke: var(--ws-folder-stroke); fill: url(#${id2}); fill-opacity: 0.1;" />
-                <g class="icon" style="fill: var(--ws-folder-stroke, currentColor);">
-                     ${imageTag}
+                <path class="back" d="M8 5.625H11.9473C12.4866 5.625 13.0105 5.80861 13.4316 6.14551L14.2881 6.83105C14.9308 7.34508 15.7298 7.625 16.5527 7.625H20C21.3117 7.625 22.375 8.68832 22.375 10V20C22.375 21.3117 21.3117 22.375 20 22.375H8C6.68832 22.375 5.625 21.3117 5.625 20V8C5.625 6.68832 6.68832 5.625 8 5.625Z" style="fill: var(--zen-folder-behind-bgcolor);" />
+                <path class="back" d="M8 5.625H11.9473C12.4866 5.625 13.0105 5.80861 13.4316 6.14551L14.2881 6.83105C14.9308 7.34508 15.7298 7.625 16.5527 7.625H20C21.3117 7.625 22.375 8.68832 22.375 10V20C22.375 21.3117 21.3117 22.375 20 22.375H8C6.68832 22.375 5.625 21.3117 5.625 20V8C5.625 6.68832 6.68832 5.625 8 5.625Z" style="stroke-width: 1.5px; stroke: var(--zen-folder-stroke); fill: url(#${id1}); fill-opacity: 0.1;" />
+                <rect class="front" x="5.625" y="9.625" width="16.75" height="12.75" rx="2.375" style="fill: var(--zen-folder-front-bgcolor);" />
+                <rect class="front" x="5.625" y="9.625" width="16.75" height="12.75" rx="2.375" style="stroke-width: 1.5px; stroke: var(--zen-folder-stroke); fill: url(#${id2}); fill-opacity: 0.1;" />
+                <g class="icon">
+                     <image href="" height="11" width="11" />
                 </g>
-                <g class="dots" style="fill: var(--ws-folder-stroke);">
+                <g class="dots" style="fill: var(--zen-folder-stroke);">
                     <ellipse cx="10" cy="16" rx="1.25" ry="1.25"/>
                     <ellipse cx="14" cy="16" rx="1.25" ry="1.25"/>
                     <ellipse cx="18" cy="16" rx="1.25" ry="1.25"/>
                 </g>
             </svg>`;
-            return this.svg(svgStr);
+            const node = this.svg(svgStr);
+            // setAttribute, not string interpolation: a quote in a stored icon
+            // URL must never be able to break out of the SVG markup.
+            if (node && iconURL) node.querySelector("image")?.setAttribute("href", iconURL);
+            return node;
         }
 
         createWorkspaceCard(ws) {
@@ -192,6 +195,7 @@
 
                 const card = this.el("div", { className: "library-workspace-card" });
                 card.setAttribute("workspace-id", ws.uuid);
+                card.toggleAttribute("active", window.gZenWorkspaces?.activeWorkspace === ws.uuid);
                 card.style.setProperty("--ws-gradient", themeData.gradient);
                 card.style.setProperty("--ws-grain", themeData.grain);
 
@@ -200,44 +204,37 @@
 
                 card.style.setProperty("--ws-primary-color", pColor);
                 card.style.setProperty("--ws-text-color", tColor);
+                // Drive native --zen-folder-* / --tab-background-color-* mixes
+                // declared on the card in spaces.css. Skip the identity var —
+                // assigning --zen-primary-color: var(--zen-primary-color) cycles.
+                if (pColor && pColor !== "var(--zen-primary-color)") {
+                    card.style.setProperty("--zen-primary-color", pColor);
+                }
                 card.style.colorScheme = themeData.isDarkMode ? "dark" : "light";
-
-                // Native Zen Tab Highlights
-                if (themeData.isDarkMode) {
-                    card.style.setProperty("--ws-tab-selected-color", "rgba(255, 255, 255, 0.12)");
-                    card.style.setProperty("--ws-tab-selected-shadow", "0 1px 1px 1px rgba(0, 0, 0, 0.1)");
-                } else {
-                    card.style.setProperty("--ws-tab-selected-color", "rgba(255, 255, 255, 0.8)");
-                    card.style.setProperty("--ws-tab-selected-shadow", "0 1px 1px 1px rgba(0, 0, 0, 0.09)");
-                }
-                card.style.setProperty("--ws-tab-hover-color", `color-mix(in srgb, ${tColor}, transparent 92.5%)`);
-
-                if (themeData.isDarkMode) {
-                    card.style.setProperty("--ws-folder-front", `color-mix(in srgb, ${pColor}, black 40%)`);
-                    card.style.setProperty("--ws-folder-behind", `color-mix(in srgb, ${pColor} 60%, #c1c1c1)`);
-                    card.style.setProperty("--ws-folder-stroke", `color-mix(in srgb, ${pColor} 15%, #ebebeb)`);
-                } else {
-                    card.style.setProperty("--ws-folder-front", `color-mix(in srgb, ${pColor}, white 70%)`);
-                    card.style.setProperty("--ws-folder-behind", `color-mix(in srgb, ${pColor} 60%, gray)`);
-                    card.style.setProperty("--ws-folder-stroke", `color-mix(in srgb, ${pColor} 50%, black)`);
-                }
 
                 if (themeData.isDarkMode) card.classList.add("dark");
 
+                const hasNativeIcon = window.gZenWorkspaces?.workspaceHasIcon ?
+                    window.gZenWorkspaces.workspaceHasIcon(ws) :
+                    !!String(ws.icon || "").trim();
+                const workspaceIcon = hasNativeIcon && window.gZenWorkspaces?.getWorkspaceIcon ?
+                    window.gZenWorkspaces.getWorkspaceIcon(ws) :
+                    String(ws.icon || "").trim();
+
                 let iconEl;
-                if (ws.icon && (ws.icon.includes("/") || ws.icon.startsWith("data:"))) {
+                if (workspaceIcon && (workspaceIcon.includes("/") || workspaceIcon.startsWith("data:"))) {
                     // [audit] SEC-3 — ws.icon is stored workspace data and this string is
                     // assigned to cssText by el(), so an unescaped quote in it injected CSS
                     // declarations into privileged chrome rather than merely breaking a mask.
                     iconEl = this.el("div", {
                         className: "library-workspace-icon",
-                        style: `mask-image: url("${window.ZenLibraryUtil.cssUrl(ws.icon)}");`
+                        style: `mask-image: url("${window.ZenLibraryUtil.cssUrl(workspaceIcon)}");`
                     });
-                } else if (ws.icon && ws.icon.trim().length > 0) {
-                    iconEl = this.el("span", { textContent: ws.icon, className: "library-workspace-icon-text" });
+                } else if (workspaceIcon) {
+                    iconEl = this.el("span", { textContent: workspaceIcon, className: "library-workspace-icon-text" });
                 } else {
                     iconEl = this.el("span", {
-                        textContent: this.getWorkspaceIcon(ws),
+                        textContent: "",
                         className: "library-workspace-icon-text fallback"
                     });
                 }
@@ -245,6 +242,7 @@
                 const iconContainer = this.el("div", {
                     className: "library-workspace-icon-container"
                 }, [iconEl]);
+                iconContainer.toggleAttribute("no-icon", !workspaceIcon);
                 iconContainer.addEventListener("dblclick", (e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -261,13 +259,20 @@
                     this.editWorkspaceTheme(ws, e);
                 });
 
-                const menuBtn = this.el("div", {
-                    className: "library-workspace-menu-button",
-                    title: "Space Options"
-                }, [this.el("div")]);
+                const menuBtn = document.createXULElement("toolbarbutton");
+                menuBtn.className = "library-workspace-menu-button";
+                menuBtn.setAttribute("title", "Space Options");
+                menuBtn.setAttribute("zen-workspace-id", ws.uuid);
+                menuBtn.appendChild(this.el("div"));
 
                 menuBtn.addEventListener("click", (e) => {
                     e.stopPropagation();
+                    // Zen resolves the space from the trigger event's closest toolbarbutton[zen-workspace-id].
+                    const nativePopup = document.getElementById("zenWorkspaceMoreActions");
+                    if (nativePopup) {
+                        nativePopup.openPopup(menuBtn, "after_end", 0, 4, true, false, e);
+                        return;
+                    }
                     this.showWorkspaceMenu(e, ws);
                 });
 
@@ -324,25 +329,36 @@
                     card.setAttribute("dragged", "true");
                     grid.setAttribute("dragging-workspace", "true");
 
-                    const placeholder = this.el("div", { className: "library-workspace-card-placeholder entering" });
+                    const placeholder = this.el("div", { className: "library-workspace-card-placeholder" });
                     grid.insertBefore(placeholder, card);
 
                     card.style.width = preDragRect.width + "px";
                     card.style.height = preDragRect.height + "px";
 
-                    const gridRectAtStart = grid.getBoundingClientRect();
-                    card.style.left = (preDragRect.left - gridRectAtStart.left) + "px";
-                    card.style.top = (preDragRect.top - gridRectAtStart.top) + "px";
+                    card.style.left = preDragRect.left + "px";
+                    card.style.top = preDragRect.top + "px";
 
-                    void card.offsetWidth;
-                    const scaledRect = card.getBoundingClientRect();
-                    const initialOffsetX = e.clientX - scaledRect.left;
-                    const lockedY = preDragRect.top;
+                    // position:fixed resolves against the nearest transformed ancestor
+                    // (the library host carries a translateX even when fully open),
+                    // not the viewport, so re-measure and shift into the card's own
+                    // coordinate space. Without this the card jumps right of the grab point.
+                    const fixedRect = card.getBoundingClientRect();
+                    const coordDX = fixedRect.left - preDragRect.left;
+                    const coordDY = fixedRect.top - preDragRect.top;
+                    const originLeft = preDragRect.left - coordDX;
+                    const originTop = preDragRect.top - coordDY;
+                    if (coordDX || coordDY) {
+                        card.style.left = originLeft + "px";
+                        card.style.top = originTop + "px";
+                    }
+
+                    const initialOffsetX = e.clientX - preDragRect.left;
+                    const lockedY = originTop;
 
                     const originalIndex = Array.from(grid.children).indexOf(placeholder);
 
-                    let currentX = preDragRect.left;
-                    let targetX = preDragRect.left;
+                    let currentX = originLeft;
+                    let targetX = originLeft;
                     let isDragging = true;
                     let mouseX = e.clientX;
 
@@ -388,12 +404,13 @@
 
                     const moveLoop = () => {
                         if (!isDragging) return;
-                        const currentGridRect = grid.getBoundingClientRect();
                         currentX += (targetX - currentX) * 0.42;
                         if (Math.abs(targetX - currentX) < 0.5) currentX = targetX;
 
-                        card.style.left = (currentX - currentGridRect.left) + "px";
-                        card.style.top = (lockedY - currentGridRect.top) + "px";
+                        card.style.left = currentX + "px";
+                        card.style.top = lockedY + "px";
+
+                        const currentGridRect = grid.getBoundingClientRect();
 
                         const scrollThreshold = 150;
                         if (mouseX < currentGridRect.left + scrollThreshold) {
@@ -409,11 +426,11 @@
 
                     const onMouseMove = (moveEvent) => {
                         mouseX = moveEvent.clientX;
-                        targetX = mouseX - initialOffsetX;
+                        targetX = mouseX - initialOffsetX - coordDX;
 
                         const gridRect = grid.getBoundingClientRect();
                         const scrollLeft = grid.scrollLeft;
-                        const paddingLeft = 16;
+                        const paddingLeft = 25;
                         const cardWidthPlusGap = ZenLibrarySpaces.CARD_WIDTH + ZenLibrarySpaces.CARD_GAP;
 
                         const localX = mouseX - gridRect.left + scrollLeft - paddingLeft;
@@ -576,6 +593,7 @@
 
             const folderEl = this.el("div", { className: `library-workspace-folder ${isExpanded ? '' : 'collapsed'}` });
             folderEl.dataset.folderId = folderId;
+            folderEl.toggleAttribute("has-active", hasActive && !isExpanded);
 
             const headerEl = this.el("div", {
                 className: "library-workspace-item folder",
@@ -585,31 +603,37 @@
                     if (this._suppressFolderToggle) return;
                     const wantCollapsed = !(folder.hasAttribute("zen-folder-collapsed") || folder.collapsed);
                     this._syncNativeFolderCollapsed(folder, wantCollapsed);
-                    const newlyExpanded = !(folder.hasAttribute("zen-folder-collapsed") || folder.collapsed);
+                    // Authoritative: derive from intent, not by re-reading the
+                    // native property, which can still report the pre-toggle
+                    // value while Zen's collapse runs.
+                    const newlyExpanded = !wantCollapsed;
                     this._folderExpansion.set(folderId, newlyExpanded);
-                    folderEl.classList.toggle("collapsed", !newlyExpanded);
-
-                    const chevron = headerEl.querySelector(".folder-chevron svg");
-                    if (chevron) {
-                        const rot = newlyExpanded ? "0deg" : "-90deg";
-                        chevron.setAttribute("style", `transform: rotate(${rot}); transition: transform 0.2s;`);
-                    }
+                    folderEl.toggleAttribute("has-active", hasActive && !newlyExpanded);
 
                     const iconSvg = headerEl.querySelector(".folder-icon svg");
                     if (iconSvg) {
                         iconSvg.setAttribute("state", newlyExpanded ? "open" : "close");
+                        // Peek state changes with the toggle too: a collapsed
+                        // folder holding the active tab shows dots.
+                        iconSvg.setAttribute("active", String(hasActive && !newlyExpanded));
+                    }
+
+                    // Expanding removes the peek clone before the height opens so
+                    // it is not left sitting under the growing list. Collapsing
+                    // rebuilds it once the body has started clipping.
+                    if (newlyExpanded) {
+                        folderEl.querySelector(":scope > .library-workspace-folder-peek")?.remove();
+                    }
+                    this._animateFolderHeight(folderEl, newlyExpanded);
+                    if (!newlyExpanded) {
+                        this._renderFolderPeek(folderEl, folder, wsId);
                     }
                 }
             });
 
-            const rot = isExpanded ? '0deg' : '-90deg';
-            const chevronSvg = this.svg(`<svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" style="transform: rotate(${rot}); transition: transform 0.2s;"><path d="M7 10l5 5 5-5z"/></svg>`);
+            const folderIconSvg = this.createFolderIconSVG(folder.iconURL, isExpanded ? "open" : "close", hasActive && !isExpanded, folderId);
 
-            const folderIconSvg = this.createFolderIconSVG(folder.iconURL, isExpanded ? "open" : "close", hasActive && !isExpanded);
-
-            headerEl.appendChild(this.el("span", { className: "folder-chevron" }, [chevronSvg]));
-
-            const iconWrapper = this.el("span", { className: "item-icon folder-icon" });
+            const iconWrapper = this.el("span", { className: "tab-group-folder-icon folder-icon" });
             iconWrapper.appendChild(folderIconSvg);
             headerEl.appendChild(iconWrapper);
 
@@ -622,14 +646,95 @@
             folderEl.appendChild(headerEl);
 
             const contentEl = this.el("div", { className: "library-workspace-folder-content" });
+            contentEl.appendChild(this.el("div", { className: "library-folder-group-start" }));
             const children = (folder.allItems || folder.tabs || []).filter(child => {
                 return !child.hasAttribute('cloned') && !child.hasAttribute('zen-empty-tab');
             });
             children.forEach(child => this.renderItemRecursive(child, contentEl, wsId));
+            if (!isExpanded) contentEl.hidden = true;
 
             folderEl.appendChild(contentEl);
+            this._renderFolderPeek(folderEl, folder, wsId);
             this._bindFolderDropTarget(folderEl, headerEl, contentEl, folder, wsId);
             container.appendChild(folderEl);
+        }
+
+        // A collapsed folder holding the active tab peeks that tab below its
+        // header. The content list stays collapsed-hidden; the peek is a
+        // separate visible clone built with the normal tab renderer.
+        _renderFolderPeek(folderEl, folder, wsId) {
+            folderEl.querySelector(":scope > .library-workspace-folder-peek")?.remove();
+            const items = folder.allItemsRecursive || folder.tabs || [];
+            const isCollapsed = folder.hasAttribute("zen-folder-collapsed") || folder.collapsed;
+            const activeTab = isCollapsed && items.find(t => t.selected && window.gBrowser?.isTab?.(t));
+            if (!activeTab) return;
+            const peekEl = this.el("div", { className: "library-workspace-folder-peek" });
+            this.renderTab(activeTab, peekEl, wsId);
+            folderEl.appendChild(peekEl);
+        }
+
+        _folderGroupStart(folderEl) {
+            return folderEl.querySelector(":scope > .library-workspace-folder-content > .library-folder-group-start");
+        }
+
+        // Read with the spacer margin already at 0: the body is auto-height, so
+        // its own box is the full row stack. scrollHeight is not usable here —
+        // overflow: clip means this is not a scroll container.
+        _folderBodyHeight(contentEl) {
+            return contentEl.getBoundingClientRect().height;
+        }
+
+        // Native nsZenFolders.animateCollapse / animateExpand: the body keeps its
+        // height, overflow clips, and the leading spacer's margin-top pulls every row
+        // up as one block over 120ms ease-in-out. Once collapse settles the body is
+        // hidden, which is the resting state — the margin alone is not.
+        _animateFolderHeight(folderEl, expand) {
+            const contentEl = folderEl.querySelector(":scope > .library-workspace-folder-content");
+            const startEl = this._folderGroupStart(folderEl);
+            if (!contentEl || !startEl) return;
+
+            const previous = startEl._folderSlide;
+            startEl._folderSlide = null;
+            try { previous?.cancel(); } catch (e) { }
+
+            // Measure with the body shown and unshifted, whichever way we are going.
+            if (expand) folderEl.classList.remove("collapsed");
+            contentEl.hidden = false;
+            startEl.style.marginTop = "0px";
+            const height = this._folderBodyHeight(contentEl);
+            if (!expand) folderEl.classList.add("collapsed");
+
+            const shift = -(height + 4);
+            const from = expand ? shift : 0;
+            const to = expand ? 0 : shift;
+            startEl.style.marginTop = `${from}px`;
+
+            const rest = () => {
+                startEl._folderSlide = null;
+                startEl.style.marginTop = `${to}px`;
+                if (folderEl.classList.contains("collapsed")) contentEl.hidden = true;
+            };
+
+            const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+            if (reduce || height <= 0 || typeof startEl.animate !== "function") {
+                rest();
+                return;
+            }
+
+            // Element.animate, not gZenUIManager.motion: that playback object is not
+            // reliably thenable, so Promise.resolve(run).then(...) settled on the next
+            // microtask and hid the body before the slide had run at all.
+            const slide = startEl.animate(
+                [{ marginTop: `${from}px` }, { marginTop: `${to}px` }],
+                { duration: 120, easing: "ease-in-out", fill: "forwards" }
+            );
+            startEl._folderSlide = slide;
+            slide.addEventListener("finish", () => {
+                if (startEl._folderSlide !== slide) return;
+                rest();
+                // The inline style now holds the end value, so stop it filling.
+                try { slide.cancel(); } catch (e) { }
+            });
         }
 
         renderTab(tab, container, wsId) {
@@ -649,7 +754,7 @@
                     window.gZenLibrary.close();
                 }
             }, [
-                this.el("img", { src: iconSrc, className: "item-icon", onerror: "this.src='chrome://global/skin/icons/defaultFavicon.svg'" }),
+                this.el("img", { src: iconSrc || undefined, className: "item-icon", onerror: (e) => e.currentTarget.removeAttribute("src") }),
                 this.el("span", { className: "item-label", textContent: tab.label })
             ]);
             itemEl.draggable = true;
@@ -698,23 +803,12 @@
         // for loaded tabs, so an unloaded pinned tab reports its old favicon there.
         // The favicon lives only in the `image` attribute — there is no `tab.image`
         // property in Gecko, which is why every tab used to fall through to the default.
+        // No default favicon here: tabs without an icon (blank, about:x) get Zen's
+        // native missing-icon tile via the .item-icon:not([src]) style instead.
         getTabIcon(tab) {
             return tab.zenStaticIcon ||
                 tab.getAttribute?.("image") ||
-                "chrome://global/skin/icons/defaultFavicon.svg";
-        }
-
-        getWorkspaceIcon(ws) {
-            try {
-                if (window.gZenWorkspaces?.getWorkspaceIcon) {
-                    return window.gZenWorkspaces.getWorkspaceIcon(ws);
-                }
-            } catch (e) { }
-
-            const icon = String(ws?.icon || "").trim();
-            if (icon) return icon;
-            const name = String(ws?.name || "").trim();
-            return name ? name[0].toUpperCase() : "";
+                "";
         }
 
         getWorkspaceProfileId(wsId) {
@@ -929,45 +1023,62 @@
             return !!(item?.isZenFolder && !item.hasAttribute?.("split-view-group"));
         }
 
-        // folder.collapsed closes the icon. Zen clips folder height with a negative
-        // margin on .zen-tab-group-start. TabGroupCollapse then runs animateCollapse
-        // after the container has already lost its height, so that animation would
-        // overwrite a correct margin with ~0. Measure first, then pin the margin
-        // after Zen's 120ms animation finishes.
+        // Zen owns the native side. The collapsed setter fires TabGroupCollapse /
+        // TabGroupExpand, and gZenFolders.animateCollapse / animateExpand write the
+        // margin on .zen-tab-group-start, the container's hidden state, has-active,
+        // folder-active and the per-tab indent.
+        //
+        // Nothing else may be written here. When a descendant holds the selected tab
+        // Zen deliberately keeps the container visible and its shift at 0 so that tab
+        // stays on screen; pinning a full-height margin and hidden from this side took
+        // the active tab out of the sidebar and left the margin stale on expand.
         _syncNativeFolderCollapsed(folder, collapsed) {
             if (!this._isZenFolder(folder)) return;
-            const tabsContainer = folder.groupContainer;
-            const groupStart = folder.groupStartElement;
-            let collapseBy = 0;
-            if (collapsed && tabsContainer) {
-                try {
-                    collapseBy = window.windowUtils.getBoundsWithoutFlushing(tabsContainer).height;
-                } catch (_) {
-                    collapseBy = tabsContainer.getBoundingClientRect().height;
-                }
-            }
-
             try {
                 folder.collapsed = collapsed;
             } catch (e) {
                 console.error("[ZenLibrary Spaces] folder.collapsed threw:", e);
             }
+            if (!collapsed) return;
+            // Zen writes the resting margin when its 120ms animation settles, so both
+            // passes land after that; the second covers a slow frame. Idempotent.
+            for (const delay of [200, 450]) {
+                setTimeout(() => this._repinCollapsedFolder(folder), delay);
+            }
+        }
 
-            const applyHeight = () => {
-                if (collapsed) {
-                    if (groupStart) groupStart.style.marginTop = `${-(collapseBy + 4)}px`;
-                    tabsContainer?.setAttribute("hidden", "true");
-                    window.gZenFolders?.updateFolderIcon?.(folder, "close");
-                } else {
-                    if (groupStart) groupStart.style.removeProperty("margin-top");
-                    tabsContainer?.removeAttribute("hidden");
-                    window.gZenFolders?.updateFolderIcon?.(folder, "open");
-                }
-            };
+        // How much of the folder still sticks out below its own header. A folder that
+        // finished collapsing ends flush with the label container.
+        _folderOverhang(folder, label) {
+            return folder.getBoundingClientRect().bottom - label.getBoundingClientRect().bottom;
+        }
 
-            applyHeight();
-            requestAnimationFrame(applyHeight);
-            setTimeout(applyHeight, 150);
+        // gZenFolders sizes the collapse from getBoundsWithoutFlushing, which reads
+        // cached layout. Driven from the Library the read can land against a layout
+        // our own toggle just dirtied, and it comes up short in proportion to the row
+        // count, so tall folders keep a strip of rows on screen.
+        //
+        // Correct against what is actually rendered rather than re-deriving the
+        // height: pull the spacer up by the overhang, then keep it only if the folder
+        // really did shrink, so a legitimate resting gap is not eaten. Never when
+        // has-active — there the 0-shift is deliberate so the selected descendant
+        // stays on screen.
+        _repinCollapsedFolder(folder) {
+            if (!folder?.isConnected || !folder.collapsed) return;
+            if (folder.hasAttribute("has-active")) return;
+            const groupStart = folder.groupStartElement;
+            const label = folder.labelContainerElement;
+            if (!groupStart || !label) return;
+
+            const overhang = this._folderOverhang(folder, label);
+            if (overhang <= 1) return;
+
+            const previous = groupStart.style.marginTop;
+            const current = parseFloat(window.getComputedStyle(groupStart).marginTop) || 0;
+            groupStart.style.marginTop = `${current - overhang}px`;
+            if (this._folderOverhang(folder, label) >= overhang - 0.5) {
+                groupStart.style.marginTop = previous;
+            }
         }
 
         // Folder the item lives in. For a folder, that is its parent, so before/after
@@ -1029,6 +1140,7 @@
                     node.classList.contains("library-workspace-separator-container") ||
                     node.classList.contains("library-workspace-unpinned-section") ||
                     node.classList.contains("library-workspace-unpinned-mask") ||
+                    node.classList.contains("library-folder-group-start") ||
                     node.classList.contains("empty-state")) {
                     node = node.nextElementSibling;
                     continue;
@@ -1380,7 +1492,8 @@
 
             let lastNode = null;
             for (let node = contentEl.lastElementChild; node; node = node.previousElementSibling) {
-                if (!node.classList.contains("empty-state")) {
+                if (!node.classList.contains("empty-state") &&
+                    !node.classList.contains("library-folder-group-start")) {
                     lastNode = node;
                     break;
                 }
@@ -1836,6 +1949,7 @@
             // unpinned tabs.
             const separator = this.createWorkspaceSeparator(wsId);
             if (items.length === pinnedCount) separator.setAttribute("no-unpinned", "true");
+            if (pinnedCount === 0) separator.setAttribute("no-pinned", "true");
 
             const unpinned = this.el("div", { className: "library-workspace-unpinned-section" });
             unpinned.appendChild(this.el("div", { className: "library-workspace-unpinned-mask" }));
@@ -1875,7 +1989,7 @@
             const cleanupBtn = this.el("div", {
                 className: "library-workspace-cleanup-button",
                 title: "Clear unpinned tabs"
-            }, [this.el("span", { textContent: "Clear" })]);
+            });
 
             cleanupBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
@@ -2017,14 +2131,16 @@
         changeWorkspaceIcon(ws, anchor) {
             if (!window.gZenEmojiPicker) return;
 
-            window.gZenEmojiPicker.open(anchor).then(async (emoji) => {
-                // If emoji is null or empty, it means "delete icon" was pressed
+            // Close on select: saving rebuilds the grid, which removes the anchor and hides the panel anyway.
+            window.gZenEmojiPicker.open(anchor, {
+                allowNone: !!window.gZenWorkspaces?.workspaceHasIcon?.(ws)
+            })?.then?.(async (emoji) => {
                 ws.icon = emoji || "";
                 if (window.gZenWorkspaces?.saveWorkspace) {
                     await window.gZenWorkspaces.saveWorkspace(ws);
-                    if (this.library.update) this.library.update();
+                    this.library.update?.();
                 }
-            }).catch(() => { }); // Prevent console errors on picker closing
+            }).catch(() => { }); // Rejects when the picker closes without a selection
         }
 
         async editWorkspaceTheme(ws, e) {
