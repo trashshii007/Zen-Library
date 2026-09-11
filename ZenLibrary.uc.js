@@ -761,6 +761,10 @@
             try {
                 const tb = document.getElementById("navigator-toolbox");
                 if (!tb) return 0;
+                if (window.gZenLibrary?._isCompactSidebarHidden?.() &&
+                    !window.gZenLibrary?._isCompactSidebarVisible?.(tb)) {
+                    return 0;
+                }
                 let width = this._measureBoxOccupied(tb);
                 if (document.documentElement.hasAttribute("zen-sidebar-expanded")) {
                     const splitter = document.getElementById("zen-sidebar-splitter");
@@ -1101,6 +1105,9 @@
             this._buttonListener = null;
             this._buttonPrefObserver = null;
             this._rightSidePrefObserver = null;
+            this._sidebarModePrefObserver = null;
+            this._sidebarModeAttrObserver = null;
+            this._sidebarModeSyncFrame = 0;
             this._springControls = null;
             this._openProgress = 0;
 
@@ -1190,6 +1197,7 @@
                 document.head.appendChild(s);
             }
             this._watchRightSidePlacement();
+            this._watchSidebarMode();
 
             // CustomizableUI is not ready at script-load time on a cold start — the same
             // constraint zen-easel's host documents. Registering the widget inline throws
@@ -1431,6 +1439,97 @@
             this.update(true);
         }
 
+        _isCompactModeActive() {
+            try {
+                return document.documentElement.getAttribute("zen-compact-mode") === "true";
+            } catch (e) {
+                return false;
+            }
+        }
+
+        _isCompactSidebarHidden() {
+            if (!this._isCompactModeActive()) return false;
+            try {
+                return Services.prefs.getBoolPref("zen.view.compact.hide-tabbar", false) ||
+                    Services.prefs.getBoolPref("zen.view.use-single-toolbar", false) ||
+                    document.documentElement.hasAttribute("zen-single-toolbar");
+            } catch (e) {
+                return false;
+            }
+        }
+
+        _isCompactSidebarVisible(toolbox = document.getElementById("navigator-toolbox")) {
+            if (!this._isCompactSidebarHidden()) return true;
+            if (!toolbox) return false;
+            return toolbox.hasAttribute("zen-has-hover") ||
+                toolbox.hasAttribute("zen-has-implicit-hover") ||
+                toolbox.hasAttribute("zen-user-show") ||
+                toolbox.hasAttribute("has-popup-menu") ||
+                toolbox.hasAttribute("zen-compact-mode-active") ||
+                toolbox.hasAttribute("panelopen") ||
+                toolbox.hasAttribute("open");
+        }
+
+        _syncLibraryOpenModeAttributes() {
+            if (!this._isOpen && !this._isTransitioning) return;
+            const compactHidden = this._isCompactSidebarHidden() &&
+                !this._isCompactSidebarVisible();
+            document.documentElement.toggleAttribute("zen-library-open-compact", compactHidden);
+            document.documentElement.toggleAttribute("zen-library-open", !compactHidden);
+        }
+
+        _scheduleSidebarModeSync() {
+            if (this._sidebarModeSyncFrame) return;
+            this._sidebarModeSyncFrame = requestAnimationFrame(() => {
+                this._sidebarModeSyncFrame = 0;
+                if (!this._element) return;
+                this._boxMarginCache = null;
+                this._syncLibraryOpenModeAttributes();
+                this.update(true);
+                this._setOpenProgress(this._openProgress);
+            });
+        }
+
+        _watchSidebarMode() {
+            if (this._sidebarModeAttrObserver) return;
+            const sync = () => this._scheduleSidebarModeSync();
+            this._sidebarModePrefObserver = { observe: sync };
+            try { Services.prefs.addObserver("zen.view.compact.hide-tabbar", this._sidebarModePrefObserver); } catch (e) { }
+            try { Services.prefs.addObserver("zen.view.use-single-toolbar", this._sidebarModePrefObserver); } catch (e) { }
+
+            this._sidebarModeAttrObserver = new MutationObserver(sync);
+            try {
+                this._sidebarModeAttrObserver.observe(document.documentElement, {
+                    attributes: true,
+                    attributeFilter: [
+                        "zen-compact-mode",
+                        "zen-sidebar-expanded",
+                        "zen-single-toolbar",
+                        "zen-right-side"
+                    ]
+                });
+            } catch (e) { }
+
+            const toolbox = document.getElementById("navigator-toolbox");
+            if (toolbox) {
+                try {
+                    this._sidebarModeAttrObserver.observe(toolbox, {
+                        attributes: true,
+                        attributeFilter: [
+                            "zen-sidebar-expanded",
+                            "zen-has-hover",
+                            "zen-has-implicit-hover",
+                            "zen-user-show",
+                            "has-popup-menu",
+                            "zen-compact-mode-active",
+                            "panelopen",
+                            "open"
+                        ]
+                    });
+                } catch (e) { }
+            }
+        }
+
         /**
          * Create a minimal shell object that provides the el() helper for modules
          */
@@ -1555,6 +1654,9 @@
             try {
                 const tb = document.getElementById("navigator-toolbox");
                 if (!tb) return 0;
+                if (this._isCompactSidebarHidden() && !this._isCompactSidebarVisible(tb)) {
+                    return 0;
+                }
                 let width = this._measureBoxOccupied(tb);
                 if (document.documentElement.hasAttribute("zen-sidebar-expanded")) {
                     const splitter = document.getElementById("zen-sidebar-splitter");
@@ -1998,6 +2100,19 @@
                 try { Services.prefs.removeObserver("zen.tabs.vertical.right-side", this._rightSidePrefObserver); } catch (e) { }
                 this._rightSidePrefObserver = null;
             }
+            if (this._sidebarModePrefObserver) {
+                try { Services.prefs.removeObserver("zen.view.compact.hide-tabbar", this._sidebarModePrefObserver); } catch (e) { }
+                try { Services.prefs.removeObserver("zen.view.use-single-toolbar", this._sidebarModePrefObserver); } catch (e) { }
+                this._sidebarModePrefObserver = null;
+            }
+            if (this._sidebarModeAttrObserver) {
+                try { this._sidebarModeAttrObserver.disconnect(); } catch (e) { }
+                this._sidebarModeAttrObserver = null;
+            }
+            if (this._sidebarModeSyncFrame) {
+                cancelAnimationFrame(this._sidebarModeSyncFrame);
+                this._sidebarModeSyncFrame = 0;
+            }
 
             this._stopSpringAnimation();
             try { this._restoreWindowButtons(); } catch (e) { }
@@ -2073,7 +2188,7 @@
                 this._hiddenUrlbarNodes = this._sweepUrlbarNodes();
                 this._element.classList.remove("closing");
                 this._element.style.visibility = "visible";
-                document.documentElement.setAttribute("zen-library-open", "true");
+                this._syncLibraryOpenModeAttributes();
                 try { document.getElementById("zen-library-button")?.setAttribute("library-open", "true"); } catch (e) { }
                 this._animateOpenProgress(1, () => {
                     this._isTransitioning = false;
@@ -2092,13 +2207,6 @@
             this._hiddenUrlbarNodes = this._sweepUrlbarNodes();
 
             const isRightSide = document.documentElement.hasAttribute("zen-right-side");
-            let isCompactHidden = false;
-            try {
-                const isCompact = document.documentElement.hasAttribute("zen-compact-mode") && document.documentElement.getAttribute("zen-compact-mode") !== "false";
-                const isTabbarHidden = Services.prefs.getBoolPref("zen.view.compact.hide-tabbar", false);
-                const isSingleToolbar = document.documentElement.hasAttribute("zen-single-toolbar");
-                isCompactHidden = isCompact && (isTabbarHidden || isSingleToolbar);
-            } catch (e) { }
 
             this._element = document.createElement("zen-library");
             this._element.id = "zen-library-container";
@@ -2115,12 +2223,7 @@
             if (isRightSide) b.append(this._element);
             else b.prepend(this._element);
 
-
-            if (!isCompactHidden) {
-                document.documentElement.setAttribute("zen-library-open", "true");
-            } else {
-                document.documentElement.setAttribute("zen-library-open-compact", "true");
-            }
+            this._syncLibraryOpenModeAttributes();
             try { document.getElementById("zen-library-button")?.setAttribute("library-open", "true"); } catch (e) { }
 
             requestAnimationFrame(() => requestAnimationFrame(() => this._element?.update()));
