@@ -106,7 +106,6 @@
             const container = this.el("div", { className: "library-list-container" });
             wrapper.appendChild(container);
             this._container = container;
-            this.library._downloadsContainer = container;
             const token = ++this._renderToken;
             this._visibleLimit = ZenLibraryDownloads.INITIAL_RENDER_LIMIT;
 
@@ -249,7 +248,7 @@
                     }
 
                     return {
-                        id: d.id,
+                        id: this._itemKey(d),
                         filename: String(filename || "FN_MISSING"),
                         size: totalBytes,
                         progressBytes,
@@ -335,13 +334,15 @@
             }
         }
 
+        // Download and HistoryDownload objects carry no id, so rows are keyed on what identifies one: target, source and start.
+        _itemKey(d) {
+            const start = d.startTime ? new Date(d.startTime).getTime() : "";
+            return `${d.target?.path || ""}|${d.source?.url || ""}|${start}`;
+        }
+
         findMatchingLiveDownload(download, liveDownloads) {
             if (!liveDownloads || !liveDownloads.length) return null;
-
-            if (download.id != null) {
-                const byId = liveDownloads.find(dl => dl.id != null && String(dl.id) === String(download.id));
-                if (byId) return byId;
-            }
+            if (liveDownloads.includes(download)) return download;
 
             if (download.target?.path) {
                 const normalizedPath = this.normalizeDownloadPath(download.target.path);
@@ -391,17 +392,50 @@
 
             if (!downloads.some(d => d.status === "downloading")) return;
 
-            this._progressTimer = setTimeout(async () => {
+            this._progressTimer = setTimeout(() => {
                 this._progressTimer = null;
-                if (!this._container || this.library.activeTab !== "downloads") return;
-
-                const token = this._renderToken;
-                const container = this._container;
-                const freshDownloads = await this.fetchDownloads();
-                if (!this._canRender(token, container)) return;
-                this._cachedDownloads = freshDownloads;
-                this.renderList(freshDownloads);
+                if (!this._canRender(this._renderToken, this._container)) return;
+                this._refreshProgress().catch(e => console.error("ZenLibrary Downloads progress refresh error:", e));
             }, 1000);
+        }
+
+        // Live rows are patched in place from the session list; the full re-fetch (history plus a stat per entry) and
+        // list rebuild — which also reset the scroll position — only run once a download leaves the downloading state.
+        async _refreshProgress() {
+            const token = this._renderToken;
+            const container = this._container;
+            const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
+            const live = await this.fetchLiveDownloads(Downloads);
+            if (!this._canRender(token, container)) return;
+
+            const active = (this._cachedDownloads || []).filter(d => d.status === "downloading");
+            let stateChanged = active.length === 0;
+            for (const item of active) {
+                const dl = this.findMatchingLiveDownload(item.historyRaw, live);
+                if (!dl || dl.succeeded || dl.error || dl.canceled || dl.stopped) {
+                    stateChanged = true;
+                    continue;
+                }
+                item.progressBytes = Number(dl.currentBytes) || 0;
+                item.totalBytes = Number(dl.totalBytes) || item.totalBytes;
+                item.size = item.totalBytes;
+                item.percent = item.totalBytes > 0 ? Math.min(100, Math.max(0, (item.progressBytes / item.totalBytes) * 100)) : 0;
+                item.estimatedSeconds = this.estimateRemainingSeconds(dl, item.progressBytes, item.totalBytes);
+                this._paintProgressRow(item);
+            }
+
+            if (stateChanged) await this.sync(token, container);
+            else this.scheduleProgressRefresh(this._cachedDownloads);
+        }
+
+        _paintProgressRow(item) {
+            const row = this._progressRows?.get(item.id);
+            if (!row?.isConnected) return;
+            row.querySelector(".download-progress-percent").textContent = item.totalBytes > 0 ? `${Math.round(item.percent)}%` : "";
+            row.querySelector(".download-progress-fill").style.width = `${item.totalBytes > 0 ? item.percent : 18}%`;
+            const [transferred, eta] = row.querySelectorAll(".download-progress-meta > span");
+            transferred.textContent = `${this.formatBytes(item.progressBytes)} of ${item.totalBytes > 0 ? this.formatBytes(item.totalBytes) : "Unknown size"}`;
+            eta.textContent = item.estimatedSeconds ? this.formatDuration(item.estimatedSeconds) : "Calculating";
         }
 
         renderList(downloads) {
@@ -417,6 +451,7 @@
 
                 this._container.innerHTML = "";
                 this._container.classList.add("scrollbar-visible");
+                this._progressRows = new Map();
 
                 // [audit] PERF-1 — the search filter lives here now rather than in
                 // fetchDownloads. See the note there.
@@ -479,7 +514,9 @@
                     groups[key].sort((a, b) => b.timestamp - a.timestamp).forEach(item => {
                         try {
                             if (item.status === "downloading") {
-                                this._container.appendChild(this.createProgressItem(item));
+                                const row = this.createProgressItem(item);
+                                this._progressRows.set(item.id, row);
+                                this._container.appendChild(row);
                                 return;
                             }
 
@@ -534,15 +571,10 @@
                                         e.dataTransfer.mozSetDataAt('application/x-moz-file', file, 0);
                                     }
 
-                                    // Set URI flavors for web pages
-                                    const fileUrl = file.path.startsWith('\\') ?
-                                        'file:' + file.path.replace(/\\/g, '/') :
-                                        'file:///' + file.path.replace(/\\/g, '/');
-
-                                    if (fileUrl) {
-                                        e.dataTransfer.setData('text/uri-list', fileUrl);
-                                        e.dataTransfer.setData('text/plain', fileUrl);
-                                    }
+                                    // URI flavors for web pages; newFileURI encodes spaces, # and % that a hand-built file: URL left raw.
+                                    const fileUrl = Services.io.newFileURI(file).spec;
+                                    e.dataTransfer.setData('text/uri-list', fileUrl);
+                                    e.dataTransfer.setData('text/plain', fileUrl);
 
                                     // Optionally, set a download URL for HTML5 drop targets
                                     if (item.url) {
@@ -792,10 +824,6 @@
             }
         }
 
-        handleContextMenu(event, item) {
-            // Placeholder
-        }
-
         removeDownloadRow(item, itemEl) {
             this._cachedDownloads = this._cachedDownloads?.filter(d => d.id !== item.id) ?? null;
 
@@ -814,7 +842,7 @@
                 let hasSectionRows = false;
                 let next = section?.nextElementSibling;
                 while (next && !next.classList?.contains("history-section-header")) {
-                    if (next.matches?.("zen-library-item, .download-progress-item")) {
+                    if (next.matches?.("zen-library-item, .library-download-progress-item")) {
                         hasSectionRows = true;
                         break;
                     }
@@ -839,6 +867,7 @@
             this._cachedDownloads = null;
             this._renderToken++;
             this._disconnectMoreObserver();
+            this._progressRows = null;
             this._container = null;
         }
 

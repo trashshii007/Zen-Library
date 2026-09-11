@@ -167,9 +167,7 @@
     }
     window.ZenLibraryItem = ZenLibraryItem;
 
-    /**
-     * Centralized State Store (Simple Redux-like implementation)
-     */
+    // Shared state between the controller and the panel; History is the only writer (SET_HISTORY).
     class ZenStore {
         constructor(initialState = {}) {
             this._state = initialState;
@@ -194,19 +192,13 @@
 
         _reducer(state, action) {
             switch (action.type) {
-                case 'SET_DOWNLOADS':
-                    return { ...state, downloads: action.payload };
                 case 'SET_HISTORY':
                     return { ...state, history: action.payload };
-                case 'SET_TAB':
-                    return { ...state, activeTab: action.payload };
                 default:
                     return state;
             }
         }
     }
-
-    // For now, trusting user "files will already be loaded".
 
     class ZenLibraryElement extends HTMLElement {
         constructor() {
@@ -217,18 +209,10 @@
 
             // Use shared store if available, otherwise create local (fallback)
             this.store = (window.gZenLibrary && window.gZenLibrary.store) ? window.gZenLibrary.store : new ZenStore({
-                downloads: [],
-                history: [],
-                activeTab: 'downloads'
+                history: []
             });
 
             this._sidebarItemEls = {};
-
-            try {
-                this._sessionStart = Services.startup.getStartupInfo().process.getTime();
-            } catch (e) {
-                this._sessionStart = Date.now();
-            }
 
             // Use pre-initialized modules from controller if available
             // This allows us to use cached data for instant rendering
@@ -594,7 +578,7 @@
 
     <!-- 3. SQUIGGLE — doodle on the pane. Stroke token. The 0.82 rest scale is repeated in
          every keyframe of zenEaselsSquiggle, the way the Boosts pieces carry theirs. -->
-    <g class="zen-easels-squiggle" style="transform-origin: 64px 71.28px; transform: scale(0.72);">
+    <g class="zen-easels-squiggle" style="transform-origin: 64px 71.28px; transform: scale(0.82);">
       <path d="M 79.08 42.08 C 91.19 54.79 88.45 58.62 81.98 56.04 C 75.51 53.47 66.12 44.54 59.62 47.55 C 53.12 50.56 91.47 84.24 77.76 86.61 C 72.57 87.51 43.87 53.27 34.03 56.04 C 23.75 58.94 58.53 84.24 60.64 100.31"
             style="fill: none; stroke: var(--zen-folder-stroke); stroke-width: 7.1px; stroke-linecap: round; stroke-linejoin: round;" />
     </g>
@@ -620,12 +604,8 @@
 
                         item.onclick = () => {
                             if (this.activeTab === id) {
-                                if (id === "history" && this.history && this.history.resetView) {
-                                    this.history.resetView();
-                                }
-                                if (id === "history" && this.history && this.history.resetControls) {
-                                    this.history.resetControls();
-                                }
+                                // resetView also collapses the filter panel (resetControls).
+                                if (id === "history") this.history?.resetView?.();
                                 this.update(true);
                             }
                             else this.activeTab = id;
@@ -704,14 +684,6 @@
             try { window.gZenLibrary?._restoreWindowButtons(); } catch (e) { }
         }
 
-        // [audit] BUG-3 — `force` is new, and its absence was a real bug rather than an
-        // omission. Four call sites already passed `true` here (Easels' re-render after the
-        // index lands, its rename and delete handlers, and the search box), on the
-        // reasonable assumption that a parameter they were passing did something. It did
-        // not: the signature took nothing, and the section-render guards below only fire on
-        // `tabChanged` or on the container being absent. By the time any of those callers
-        // ran, the grid existed and the tab had not changed — so the Easels list never
-        // refreshed in place, and typing in its search box did nothing at all.
         // Native zen-library: 84px sidebar + 27rem content (media/spaces size themselves). Never wider than 95vw.
         // Pure DOM-free math so the controller can apply it before the host is inserted and styled for the first time.
         applyTargetWidth() {
@@ -732,6 +704,7 @@
             return targetWidth;
         }
 
+        // `force` re-renders the current section in place (Easels after an index change, rename, delete or search).
         update(force = false) {
             this._updateDepth = (this._updateDepth || 0) + 1;
             try {
@@ -753,10 +726,7 @@
                 window.gZenLibrary?._syncShift?.();
 
                 for (const id in this._sidebarItemEls) {
-                    const item = this._sidebarItemEls[id];
-                    const isActive = id === this.activeTab;
-                    const wasActive = item.classList.contains("active");
-                    item.classList.toggle("active", isActive);
+                    this._sidebarItemEls[id].classList.toggle("active", id === this.activeTab);
                 }
 
                 const content = this.shadowRoot.querySelector(".library-content");
@@ -895,8 +865,7 @@
                 if (!this.boosts && window.ZenLibraryBoosts) this.boosts = new window.ZenLibraryBoosts(this);
                 if (!this.easels && window.ZenLibraryEasels) {
                     this.easels = new window.ZenLibraryEasels(this);
-                    // Registered with the controller as well, or destroy() cannot find it
-                    // and its cached thumbnail blob URLs are never revoked.
+                    // Registered with the controller as well, or destroy() cannot find it to remove its context menu.
                     if (window.gZenLibrary && window.gZenLibrary._modules) {
                         window.gZenLibrary._modules.easels = this.easels;
                     }
@@ -934,10 +903,6 @@
                     }
                 }
                 else if (this.activeTab === "easels" && this.easels) {
-                    // [audit] BUG-3 — `force` is honoured here: the Easels list is the one
-                    // section whose contents change from underneath it (a board created in
-                    // another tab, a rename, a delete, a search term) while the container it
-                    // lives in stays exactly where it was.
                     if (!contentBelongsToTab || !content.querySelector(".easel-card-grid") || tabChanged || force) {
                         elToAppend = this.easels.render();
                         needsAppend = true;
@@ -1029,16 +994,10 @@
             this._sidebarModePrefObserver = null;
             this._sidebarModeAttrObserver = null;
             this._sidebarModeSyncFrame = 0;
-            this._springControls = null;
             this._openTween = null;
             this._openProgress = 0;
 
-            // Initialize Store
-            this.store = new ZenStore({
-                downloads: [],
-                history: [],
-                activeTab: this.lastActiveTab
-            });
+            this.store = new ZenStore({ history: [] });
 
             // Persistent module instances for background pre-fetching
             this._modules = {
@@ -1094,7 +1053,6 @@
             s.textContent = `
 :root {
   --zen-library-progress: 0;
-  --zen-library-wrapper-target-px: 0px;
 }
 
 /* Positioning context for the panel. Relative without offsets moves
@@ -1103,14 +1061,10 @@
   position: relative;
 }
 
-/* PR motion (literal): target-px carries the full signed offset and progress
-   scales it, recomputed from live geometry on every frame — no CSS
-   transition anywhere, so open and close are the same curve. */
-/* Not #urlbar: it is position:fixed (zen-omnibox.css) and already rides whichever transformed ancestor contains it. */
-:root[zen-library-open] #zen-appcontent-wrapper,
-:root[zen-library-open-compact] #zen-appcontent-wrapper {
-  transform: translateX(calc(var(--zen-library-progress, 0) * var(--zen-library-wrapper-target-px, 0px)));
-}
+/* PR motion: the content shift is written inline on #zen-appcontent-wrapper (_applyWrapperShift),
+   like native — a section width change re-derives it every frame, and a :root custom property
+   there restyled the whole document per frame. #urlbar is position:fixed (zen-omnibox.css) and
+   rides whichever transformed ancestor contains it. */
 
 /* filter, not opacity: a userChrome/user-sheet "opacity: 1 !important" on the toolbox beats any author rule. */
 :root[zen-library-open] #navigator-toolbox,
@@ -1389,6 +1343,8 @@
                 this._syncLibraryOpenModeAttributes();
                 this.update(true);
                 this._setOpenProgress(this._openProgress);
+                // After the dock decision above: a mode change can move the cluster in or out of the toolbox.
+                this._reserveWindowButtonDock();
             });
         }
 
@@ -1471,7 +1427,6 @@
             const shift = this._measureShift();
             if (shift === tween.shift) return;
             tween.shift = shift;
-            document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${shift}px`);
             const anim = wrapper.animate(tween.frames("wrapper", shift), tween.opts);
             if (tween.host.startTime !== null) anim.startTime = tween.host.startTime;
             const index = this._openAnimations.indexOf(tween.wrapper);
@@ -1598,11 +1553,10 @@
         _setOpenProgress(value) {
             const progress = Math.max(0, Math.min(1, Number(value) || 0));
             this._openProgress = progress;
+            // Same value most frames of a width transition; Gecko drops an unchanged setProperty without a restyle.
             document.documentElement.style.setProperty("--zen-library-progress", String(progress));
             this._element?.style?.setProperty("--zen-library-progress", String(progress));
-            try {
-                document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${this._measureShift()}px`);
-            } catch (e) { }
+            try { this._applyWrapperShift(progress, this._measureShift()); } catch (e) { }
             this._applyWindowButtonDock(progress);
             // The URL pill fades on the toolbox's curve and hides only once the tween lands.
             this._paintUrlbarChrome(progress);
@@ -1615,7 +1569,7 @@
             else if (!pastPoint && this._windowButtonsAdopted) this._restoreWindowButtons();
         }
 
-        _stopSpringAnimation() {
+        _stopOpenAnimation() {
             for (const anim of this._openAnimations || []) {
                 try { anim.cancel(); } catch (e) { }
             }
@@ -1625,18 +1579,37 @@
                 clearTimeout(this._dockTimer);
                 this._dockTimer = null;
             }
-            if (!this._springControls) return;
-            try { this._springControls.stop(); } catch (e) { }
-            this._springControls = null;
+        }
+
+        // Rest-state transform, inline on the wrapper only (native writes appContentWrapper.style.transform the same way).
+        // Same text as the wrapper keyframe at that progress, so a tween lands on it without a hop; empty at 0 so nothing lingers when closed.
+        _applyWrapperShift(progress, shift) {
+            const wrapper = document.getElementById("zen-appcontent-wrapper");
+            if (!wrapper) return;
+            const value = progress > 0 ? `translateX(${progress * shift}px)` : "";
+            // Unchanged writes are skipped: the ResizeObserver re-derives the same target every frame of a width transition, and a rewrite would restart the transition below.
+            if (wrapper.style.transform === value) return;
+            if (value) wrapper.style.transform = value;
+            else wrapper.style.removeProperty("transform");
+        }
+
+        // Rest-state only: a section width change moves the page on the same clock as the panel's width
+        // transition (core.css), instead of chasing the live edge a frame behind. Under the open/close
+        // tween the keyframes own the transform, and a transition there would replay the base-value change
+        // once they are cancelled, so it is switched on a frame after the open lands and off before any tween.
+        _setWrapperTransition(on) {
+            const wrapper = document.getElementById("zen-appcontent-wrapper");
+            if (!wrapper) return;
+            if (on) wrapper.style.transition = `transform ${this._prefNumber("zen.library.animation.width-duration", 150)}ms ease-in-out`;
+            else wrapper.style.removeProperty("transition");
         }
 
         // Signed content shift for the current panel width (panel minus the in-flow toolbox).
         _measureShift() {
-            // The element owns the target width (update() sets it); before first layout the live box is 0 and this is all there is.
+            // Target width, not the live box: mid-transition the live box lags, and the page runs its own transition to the target (see _setWrapperTransition). Live is the fallback before update() has set one.
             let panelWidth = this._element?._lastTargetWidth || 0;
-            if (this._element?.parentNode && window.windowUtils?.getBoundsWithoutFlushing) {
-                const live = window.windowUtils.getBoundsWithoutFlushing(this._element).width;
-                if (live > 0) panelWidth = live;
+            if (!panelWidth && this._element?.parentNode && window.windowUtils?.getBoundsWithoutFlushing) {
+                panelWidth = window.windowUtils.getBoundsWithoutFlushing(this._element).width;
             }
             const shift = Math.max(0, panelWidth - this._measureToolboxWidth());
             return (this._element?.hasAttribute("right-side") ? -1 : 1) * shift;
@@ -1654,7 +1627,6 @@
             };
         }
 
-        // Both drivers expose stop(), or a fallback close animation would outlive a reopen and tear the panel down.
         // The host's opacity is the progress by construction, so a retarget mid-tween starts from what is on screen.
         _currentProgress() {
             if (this._openAnimations && this._element) {
@@ -1666,13 +1638,21 @@
 
         _animateOpenProgress(target, onComplete) {
             const from = this._currentProgress();
-            this._stopSpringAnimation();
+            this._stopOpenAnimation();
+            this._setWrapperTransition(false);
             this._setOpenProgress(from);
             const finish = () => {
                 // Rest state first, then drop the fill-forwards keyframes: same values, so nothing flashes.
                 this._setOpenProgress(target);
-                this._stopSpringAnimation();
+                this._stopOpenAnimation();
                 onComplete?.();
+                // Two frames out, not one: `finished` settles before this tick's rAF callbacks, so a single rAF lands in
+                // the same style flush as the cancel, and the compositor-driven transform's main-thread value is still
+                // stale there — Gecko then transitions from that stale value to the rest value, and the page slides in twice.
+                // After a painted frame the computed value is the rest value, and enabling the transition moves nothing.
+                if (target >= 1) requestAnimationFrame(() => requestAnimationFrame(() => {
+                    if (this._isOpen && !this._isTransitioning) this._setWrapperTransition(true);
+                }));
             };
 
             // Native zen-library: 280ms cubic-bezier(0.32, 0.72, 0, 1), scaled by the distance left to travel.
@@ -1684,55 +1664,41 @@
 
             // Like native, WAAPI keyframes on the panel, toolbox and content wrapper: compositor-driven, no per-frame restyle of :root.
             const host = this._element;
-            if (host?.animate && host.parentNode) {
-                const opts = { duration, easing: `cubic-bezier(${this._animationEasing().join(", ")})`, fill: "forwards" };
-                const shift = this._measureShift();
-                const clamp = 2 / 3;
-                const frames = (key, px = shift) => {
-                    const list = [{ ...this._keyframesAt(from, px)[key], offset: 0 }];
-                    // The fade clamps at 2/3; when the segment crosses it, keep that stop so the fade stays linear to zero like native.
-                    if ((from - clamp) * (target - clamp) < 0) list.push({ ...this._keyframesAt(clamp, px)[key], offset: (clamp - from) / (target - from) });
-                    list.push({ ...this._keyframesAt(target, px)[key], offset: 1 });
-                    return list;
-                };
-                document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${shift}px`);
-                const anims = [host.animate(frames("host"), opts)];
-                const toolbox = document.getElementById("navigator-toolbox");
-                if (toolbox) anims.push(toolbox.animate(frames("toolbox"), opts));
-                const wrapper = document.getElementById("zen-appcontent-wrapper");
-                const wrapperAnim = wrapper?.animate(frames("wrapper"), opts);
-                if (wrapperAnim) anims.push(wrapperAnim);
-                for (const node of this._hiddenUrlbarNodes || []) {
-                    node.style.removeProperty("visibility");
-                    anims.push(node.animate(frames("urlbar"), opts));
-                }
-                this._openAnimations = anims;
-                // What _retargetWrapperTween needs to rebuild the wrapper leg if the panel resizes mid-tween.
-                this._openTween = wrapperAnim ? { host: anims[0], wrapper: wrapperAnim, frames, opts, shift } : null;
-                // Caption buttons dock at 60% of an open and undock as a close starts.
-                if (target > from) {
-                    const at = duration * Math.max(0, (0.6 - from) / (target - from));
-                    this._dockTimer = setTimeout(() => { this._dockTimer = null; this._applyWindowButtonDock(1); }, at);
-                } else {
-                    this._applyWindowButtonDock(0);
-                }
-                anims[0].finished.then(() => { if (this._openAnimations === anims) finish(); }, () => { });
+            if (!host?.parentNode) {
+                finish();
                 return;
             }
-
-            const start = this._openProgress;
-            const startTime = performance.now();
-            let stopped = false;
-            this._springControls = { stop: () => { stopped = true; } };
-            const step = (now) => {
-                if (stopped) return;
-                const t = Math.min(1, (now - startTime) / duration);
-                const eased = 1 - Math.pow(1 - t, 3);
-                this._setOpenProgress(start + (target - start) * eased);
-                if (t < 1) requestAnimationFrame(step);
-                else finish();
+            const opts = { duration, easing: `cubic-bezier(${this._animationEasing().join(", ")})`, fill: "forwards" };
+            const shift = this._measureShift();
+            const clamp = 2 / 3;
+            const frames = (key, px = shift) => {
+                const list = [{ ...this._keyframesAt(from, px)[key], offset: 0 }];
+                // The fade clamps at 2/3; when the segment crosses it, keep that stop so the fade stays linear to zero like native.
+                if ((from - clamp) * (target - clamp) < 0) list.push({ ...this._keyframesAt(clamp, px)[key], offset: (clamp - from) / (target - from) });
+                list.push({ ...this._keyframesAt(target, px)[key], offset: 1 });
+                return list;
             };
-            requestAnimationFrame(step);
+            const anims = [host.animate(frames("host"), opts)];
+            const toolbox = document.getElementById("navigator-toolbox");
+            if (toolbox) anims.push(toolbox.animate(frames("toolbox"), opts));
+            const wrapper = document.getElementById("zen-appcontent-wrapper");
+            const wrapperAnim = wrapper?.animate(frames("wrapper"), opts);
+            if (wrapperAnim) anims.push(wrapperAnim);
+            for (const node of this._hiddenUrlbarNodes || []) {
+                node.style.removeProperty("visibility");
+                anims.push(node.animate(frames("urlbar"), opts));
+            }
+            this._openAnimations = anims;
+            // What _retargetWrapperTween needs to rebuild the wrapper leg if the panel resizes mid-tween.
+            this._openTween = wrapperAnim ? { host: anims[0], wrapper: wrapperAnim, frames, opts, shift } : null;
+            // Caption buttons dock at 60% of an open and undock as a close starts.
+            if (target > from) {
+                const at = duration * Math.max(0, (0.6 - from) / (target - from));
+                this._dockTimer = setTimeout(() => { this._dockTimer = null; this._applyWindowButtonDock(1); }, at);
+            } else {
+                this._applyWindowButtonDock(0);
+            }
+            anims[0].finished.then(() => { if (this._openAnimations === anims) finish(); }, () => { });
         }
 
         _onKeyDown(e) {
@@ -1859,7 +1825,7 @@
         }
 
         _wheelGestureMode(e, workspaceOffset) {
-            if (this._isOpen && workspaceOffset > 0 && this._isLibraryGestureTarget(e)) {
+            if (this._isOpen && workspaceOffset > 0 && this._isLibraryGestureTarget(e) && !this._wheelScrollsLibraryContent(e)) {
                 return "close";
             }
             if (!this._isOpen && workspaceOffset < 0 && this._isOnFirstWorkspace() && this._isSidebarGestureTarget(e)) {
@@ -1990,6 +1956,19 @@
                 "";
         }
 
+        // A horizontal wheel over library content that can still scroll that way (the Spaces grid) scrolls it; only a wall closes.
+        _wheelScrollsLibraryContent(e) {
+            const dir = Math.sign(e.deltaX);
+            for (const node of e.composedPath?.() || []) {
+                if (node?.nodeType !== Node.ELEMENT_NODE) continue;
+                if (node.localName === "zen-library") return false;
+                const max = node.scrollWidth - node.clientWidth;
+                if (max <= 1 || !/auto|scroll/.test(getComputedStyle(node).overflowX)) continue;
+                if ((dir > 0 && node.scrollLeft < max - 1) || (dir < 0 && node.scrollLeft > 1)) return true;
+            }
+            return false;
+        }
+
         _isLibraryGestureTarget(e) {
             const path = e.composedPath?.() || [];
             if (path.some((el) => el?.tagName?.toLowerCase?.() === "zen-library" || el?.id === "zen-library-container")) {
@@ -2103,7 +2082,7 @@
             }
             this._unwatchPanelSize();
 
-            this._stopSpringAnimation();
+            this._stopOpenAnimation();
             try { this._restoreWindowButtons(); } catch (e) { }
             try { this._clearUrlbarChrome(); } catch (e) { }
             try { document.getElementById("zen-library-button")?.removeAttribute("library-open"); } catch (e) { }
@@ -2121,7 +2100,8 @@
             document.documentElement.removeAttribute("zen-library-open-compact");
             document.documentElement.style.removeProperty("--zen-library-offset");
             document.documentElement.style.removeProperty("--zen-library-progress");
-            document.documentElement.style.removeProperty("--zen-library-wrapper-target-px");
+            this._setWrapperTransition(false);
+            document.getElementById("zen-appcontent-wrapper")?.style.removeProperty("transform");
         }
         toggle() {
             const now = Date.now();
@@ -2175,9 +2155,9 @@
                 this._isTransitioning = true;
                 this._boxMarginCache = null;
                 this._hiddenUrlbarNodes = this._sweepUrlbarNodes();
-                this._element.classList.remove("closing");
                 this._element.style.visibility = "visible";
                 this._syncLibraryOpenModeAttributes();
+                this._reserveWindowButtonDock();
                 try { document.getElementById("zen-library-button")?.setAttribute("library-open", "true"); } catch (e) { }
                 this._animateOpenProgress(1, () => {
                     this._isTransitioning = false;
@@ -2217,6 +2197,7 @@
             this._watchPanelSize(this._element);
 
             this._syncLibraryOpenModeAttributes();
+            this._reserveWindowButtonDock();
             try { document.getElementById("zen-library-button")?.setAttribute("library-open", "true"); } catch (e) { }
 
             this._animateOpenProgress(1, () => {
@@ -2238,7 +2219,6 @@
             const el = this._element;
             this._isTransitioning = true;
             this._isOpen = false;
-            el.classList.add("closing");
 
             const end = () => {
                 // A reopen retargets the spring; its completion must not tear down a panel that is open again.
@@ -2256,8 +2236,8 @@
                     document.documentElement.removeAttribute("zen-library-open-compact");
                     document.documentElement.style.removeProperty("--zen-library-offset");
                     document.documentElement.style.removeProperty("--zen-library-progress");
-                    document.documentElement.style.removeProperty("--zen-library-wrapper-target-px");
-                    document.documentElement.removeAttribute("zen-media-glance-active");
+                    this._setWrapperTransition(false);
+                    document.getElementById("zen-appcontent-wrapper")?.style.removeProperty("transform");
                     this._boxMarginCache = null;
                     try { this._clearUrlbarChrome(); } catch (e) { }
                     try { document.getElementById("zen-library-button")?.removeAttribute("library-open"); } catch (e) { }
@@ -2277,6 +2257,21 @@
             if (this._windowButtonsAdopted) return true;
             const real = window.gZenVerticalTabsManager?.actualWindowButtons;
             return !!real?.closest?.("#navigator-toolbox");
+        }
+
+        // Open the dock row at the cluster's live height before the slide starts, so the hand-off at 60% moves nothing.
+        // Measured wherever the node is (toolbox, or already in this host on a reopen); a 0 means it is not rendered, and then the row stays closed.
+        _reserveWindowButtonDock() {
+            const host = this._element;
+            if (!host) return;
+            const real = window.gZenVerticalTabsManager?.actualWindowButtons;
+            let height = 0;
+            if (real && this._windowButtonsInToolbox()) {
+                try { height = window.windowUtils.getBoundsWithoutFlushing(real).height; } catch (e) { }
+            }
+            if (height > 0) host.style.setProperty("--zen-library-window-buttons-height", `${height}px`);
+            else host.style.removeProperty("--zen-library-window-buttons-height");
+            host.toggleAttribute("window-buttons", height > 0);
         }
 
         // Move the live caption cluster into the Library sidebar. The original
@@ -2307,8 +2302,7 @@
             this._windowButtonsNext = null;
             try {
                 const real = window.gZenVerticalTabsManager?.actualWindowButtons;
-                const host = this._element;
-                if (host) host.removeAttribute("window-buttons");
+                // The dock row stays open: a close undocks at its start, and collapsing the row there hopped the sidebar up as it left.
                 if (!real) return;
                 real.removeAttribute("slot");
                 if (next && next.parentNode === parent) parent.insertBefore(real, next);

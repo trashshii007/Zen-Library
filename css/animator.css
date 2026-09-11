@@ -4,13 +4,8 @@
 :root[zen-library-open-compact="true"] #browser {
   overflow: hidden !important;
 }
-/* PR motion: the content shift is recomputed from live geometry on every
-   spring frame (#zen-library-global-style) — no static offset, no CSS
-   transition here, or the two drivers fight and the page overlaps the panel.
-   The urlbar rides the same shift so it stays glued to the content. */
-/* Web-content motion is owned by the progress spring
-   (#zen-library-global-style): no static offset or transition here, so open
-   and close stay in sync with the panel instead of racing it. */
+/* No content shift here: ZenLibrary.uc.js writes it inline on #zen-appcontent-wrapper (keyframes while
+   opening, a transition on width changes); a rule here would fight it. Only the media-drag reset lives here. */
 :root[zen-library-dragging="true"] #zen-tabbox-wrapper {
   transform: translateX(calc(-1 * var(--zen-library-offset, 0px))) !important;
   transition-delay: 0.1s !important;

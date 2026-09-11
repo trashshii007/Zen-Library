@@ -327,10 +327,6 @@
             popup.openPopupAtScreen(e.screenX, e.screenY, true);
         }
 
-        resetView() {
-            this._searchTerm = "";
-        }
-
         destroy() {
             // The popup lives in mainPopupSet, outside anything the library tears down
             // itself, so it has to be removed by hand or a reload leaves one behind.

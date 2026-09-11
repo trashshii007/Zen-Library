@@ -37,13 +37,14 @@
             const observers = this._placesObservers();
             if (this._placesListener || !observers) return;
             this._placesListener = (events) => {
-                if (!this._container) return;
+                // The container outlives a close; only a mounted list is worth a re-query.
+                if (!this._container?.isConnected) return;
                 // sync() only refetches when the newest visit changed; title updates and removals never move it.
                 const refetch = events.some(e => e.type !== "page-visited");
                 clearTimeout(this._placesTimer);
                 this._placesTimer = setTimeout(() => {
                     this._placesTimer = null;
-                    if (!this._container) return;
+                    if (!this._container?.isConnected) return;
                     if (refetch) this.fetchHistory().then(() => this.renderBatch(true));
                     else this.sync();
                 }, 250);
@@ -63,27 +64,15 @@
             this._placesListener = null;
         }
 
-        /**
-         * Background initialization - called at startup to pre-fetch data.
-         *
-         * [audit] BUG-2 — this class used to declare init() twice. In a class body the
-         * second declaration silently replaces the first, so the one that actually ran was
-         * the *other* one further down: no re-entrancy guard, and a fresh store subscription
-         * added on every call. The two are merged here and the duplicate is gone.
-         */
+        // Background initialization - called at startup to pre-fetch data.
         async init() {
             if (this._isFetching || this._initialized) return;
             this._isFetching = true;
             try {
-                // Subscribed once, on the first init only, so repeated calls cannot stack up
-                // listeners that each re-render the list.
+                // Subscribed once; every fetchHistory caller renders itself, so the subscriber only takes the list.
                 if (!this._unsubscribe && this.library.store) {
                     this._unsubscribe = this.library.store.subscribe((state) => {
-                        if (state.history && state.history !== this._items) {
-                            this._items = state.history;
-                            // Only re-render if we are already displaying something.
-                            if (this._container) this.renderBatch(true);
-                        }
+                        if (state.history) this._items = state.history;
                     });
                 }
                 await this.fetchHistory();
@@ -521,10 +510,6 @@
             }
         }
 
-        // [audit] BUG-2 — a second `async init()` used to live here, silently overriding the
-        // guarded one at the top of the class. Its body has been folded into that one; this
-        // is where it was.
-
         // Releases the store subscription taken in init(). Called from destroy().
         _unsubscribeStore() {
             if (this._unsubscribe) {
@@ -574,12 +559,9 @@
                 }
                 root.containerOpen = false;
 
-                // dispatch to store
-                if (this.library.store) {
-                    this.library.store.dispatch({ type: 'SET_HISTORY', payload: items });
-                } else {
-                    this._items = items;
-                }
+                // Set here as well as via the store: an instance built before the controller's init has no subscription.
+                this._items = items;
+                this.library.store?.dispatch({ type: 'SET_HISTORY', payload: items });
             } catch (e) {
                 console.error("ZenLibrary History Fetch Error:", e);
             } finally {
@@ -589,6 +571,7 @@
 
         renderBatch(reset = true) {
             try {
+                // Not isConnected: render() fills the container before update() mounts it.
                 if (!this._container) return;
 
                 // Check if custom elements are properly registered
@@ -776,13 +759,6 @@
             return browserWindow.SessionStore || window.SessionStore || window.opener?.SessionStore || null;
         }
 
-        // [audit] SEC-3 — this was the only correct copy of this escaping in the mod, and it
-        // was used at exactly one of the four places that needed it. It now delegates to the
-        // shared helper so the other three cannot drift away from it again.
-        _cssUrlValue(url) {
-            return window.ZenLibraryUtil.cssUrl(url || "about:blank");
-        }
-
         _ensureContextMenu() {
             if (document.getElementById("zen-history-context-menu")) return;
             const popup = document.createXULElement("menupopup");
@@ -880,7 +856,7 @@
                     const entry = entries[entryIndex] || entries[0] || {};
                     const title = tabData.title || entry.title || "Untitled";
                     const url = entry.url || "about:blank";
-                    const iconUrl = this._cssUrlValue(`page-icon:${url}`);
+                    const iconUrl = window.ZenLibraryUtil.cssUrl(`page-icon:${url}`);
 
                     const row = this.el("div", {
                         className: "library-list-item",

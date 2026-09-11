@@ -9,39 +9,6 @@
     position: relative;
 }
 
-.view-switcher-container {
-    display: flex;
-    align-items: center;
-    padding: 6px 16px;
-    margin-bottom: 6px;
-    gap: 8px;
-    cursor: pointer;
-    font-size: 11px;
-    font-weight: 600;
-    opacity: 0.6;
-    transition: opacity 0.2s;
-    user-select: none;
-}
-
-.view-switcher-container:hover {
-    opacity: 1;
-}
-
-.view-switcher-arrow {
-    width: 14px;
-    height: 14px;
-    background-color: currentColor;
-    mask-image: url("chrome://global/skin/icons/arrow-down.svg");
-    mask-size: contain;
-    mask-repeat: no-repeat;
-    mask-position: center;
-    transition: transform 0.3s var(--zen-library-easing);
-}
-
-.panes-shifted .view-switcher-arrow {
-    transform: rotate(-90deg);
-}
-
 .panes-shifted .library-list-panes {
     transform: translateX(-100%);
 }
@@ -173,13 +140,6 @@
     mask-size: contain;
     mask-repeat: no-repeat;
     mask-position: center;
-}
-
-.history-separator {
-    height: 1px;
-    background: currentColor;
-    opacity: 0.1;
-    margin: 4px 16px;
 }
 
 .history-bottom-spacer {

@@ -102,5 +102,22 @@
     "defaultValue": 150,
     "value": "number",
     "placeholder": "150"
+  },
+  {
+    "type": "separator",
+    "label": "Compatibility",
+    "margin": "20px 0 10px 0"
+  },
+  {
+    "type": "checkbox",
+    "property": "zen.library.compat.advanced-tab-groups",
+    "label": "Advanced Tab Groups: smooth group collapse in Spaces",
+    "defaultValue": false
+  },
+  {
+    "type": "text",
+    "label": "Only for the Advanced Tab Groups mod, which renders plain tab groups in the Spaces section. Fixes its collapse snapping when a group holds the active tab and keeps that tab visible under the collapsed header, like the sidebar. Restart Zen after changing.",
+    "size": "12px",
+    "margin": "0 0 8px 0"
   }
 ]

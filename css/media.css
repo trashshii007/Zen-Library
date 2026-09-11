@@ -17,8 +17,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    /* Inset by the bar's 4px padding, matching .media-card-actions below. A pill sharing the
-       bar's radius outright pokes past the bar's inner corner curve. */
+    /* Inset by the bar's 4px padding: a pill sharing the bar's radius outright pokes past its inner corner curve. */
     border-radius: calc(var(--border-radius-medium, 8px) - 4px);
     cursor: pointer;
     transition: all 0.2s var(--zen-library-easing);
@@ -339,25 +338,6 @@
     transition: opacity 0.2s;
 }
 
-.media-glance-info {
-    padding: 16px 20px;
-    background: rgba(20, 20, 20, 0.8);
-    color: #fff;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.media-glance-title {
-    font-size: 14px;
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-right: 20px;
-}
-
 .empty-icon.media-icon {
     background: transparent !important;
     background-image: none !important;
@@ -372,71 +352,4 @@
     margin: 0 auto;
     width: 64px !important;
     height: 64px !important;
-}
-
-/* === 13. CONTEXT MENU (MATCHING SPACES/ZEN DESIGN) === */
-
-.media-context-menu {
-    position: fixed;
-    z-index: 10;
-    background: light-dark(color-mix(in srgb, var(--zen-primary-color, #3b82f6), white 70%),
-            color-mix(in srgb, var(--zen-primary-color, #3b82f6), black 40%));
-    border-radius: 12px;
-    padding: 6px;
-    min-width: 160px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-    animation: menuSpringIn 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.15);
-    transform-origin: top left;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.media-context-menu .media-menu-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 12.5px;
-    font-weight: 550;
-    color: var(--zen-sidebar-text-color);
-    transition: background 0.08s ease;
-    user-select: none;
-}
-
-.media-context-menu .media-menu-item:hover {
-    background: var(--zen-library-hover-bg);
-}
-
-.media-context-menu .media-menu-item:active {
-    background: var(--zen-library-active-bg);
-}
-
-.media-context-menu .menu-icon {
-    width: 16px;
-    height: 16px;
-    color: inherit;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0.9;
-}
-
-.media-context-menu .menu-icon svg {
-    width: 100%;
-    height: 100%;
-}
-
-@keyframes menuSpringIn {
-    from {
-        opacity: 0;
-        transform: translateY(-10px) scale(0.94);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-    }
 }

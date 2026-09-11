@@ -39,52 +39,25 @@
             return Math.min(total, window.innerWidth * 0.9);
         }
 
-        static getData() {
-            const workspaces = this.getWorkspaces();
-            const width = this.calculatePanelWidth(workspaces.length);
-            return { workspaces, width };
-        }
-
         constructor(library) {
             this.library = library;
-            // Mirrors folder.collapsed so a card repaint can restore folder icons; native collapsed is the source of truth.
+            // Write-only here; Advanced Tab Groups' patched renderItemRecursive writes into it too, so it must exist.
             this._folderExpansion = new Map();
         }
 
         get el() { return this.library.el.bind(this.library); }
         get svg() { return this.library.svg.bind(this.library); }
 
+        // Returns the grid; the shell's update() mounts it and owns the panel width (calculatePanelWidth).
         render() {
             // Capture existing scroll position
             const oldGrid = this.library.shadowRoot.querySelector(".library-workspace-grid");
             const oldScroll = oldGrid ? oldGrid.scrollLeft : 0;
 
-            const { workspaces, width } = ZenLibrarySpaces.getData();
-            // We return the grid to be appended by the main update loop,
-            // OR we can manage the container ourselves if the shell delegates that.
-            // Based on ZenLibrary.uc.js's shell logic, it calls render() but also handles the grid creation
-            // in its `update()` method for sticky headers etc?
-            // Actually, the main shell's update() seems to handle the High Level structure.
-            // But if we want to modularize, we should do as much as possible here.
-
-            // However, the main shell's `update()` (lines 2856+ in backup) does a lot of heavy lifting
-            // including calculating width and diffing hash.
-            // The REFRACTORED ZenLibrary.uc.js (which we verified) delegates to `.update()`?
-            // No, the refactored ZenLibrary.uc.js calls `this._spaces.render()`?
-            // Let's look at the refactored ZenLibrary.uc.js ... I don't have it fully in memory
-            // but the plan was for `renderSpaces()` or similar.
-
-            // Assuming the shell calls `render()` and expects an element back.
-            // BUT, the Spaces UI is a horizontal grid that affects the WINDOW WIDTH.
-            // The logic to resize the window (`this.style.setProperty("--zen-library-width"...)`)
-            // IS in the shell's `update()`.
-
-            // So this module should primarily return the CONTENT (the grid).
-
             const grid = this.el("div", { className: "library-workspace-grid" });
             const fragment = document.createDocumentFragment();
 
-            for (const ws of workspaces) {
+            for (const ws of ZenLibrarySpaces.getWorkspaces()) {
                 const card = this.createWorkspaceCard(ws);
                 if (card) fragment.appendChild(card);
             }
@@ -104,7 +77,7 @@
 
             grid.appendChild(fragment);
 
-            // Optimized wheel handling matching backup
+            // Vertical wheel pans the grid unless a card list under the pointer can still scroll that way.
             grid.onwheel = (e) => {
                 const list = e.target.closest(".library-workspace-card-list");
                 let shouldScrollHorizontal = !list;
@@ -137,8 +110,6 @@
 
             return grid;
         }
-
-        // --- Core Rendering Logic Copied from Backup ---
 
         createFolderIconSVG(iconURL = '', state = 'close', active = false, key = '') {
             // Stable per-folder gradient IDs: identical inputs hit the svg()
@@ -618,15 +589,16 @@
                         iconSvg.setAttribute("active", String(hasActive && !newlyExpanded));
                     }
 
-                    // Expanding removes the peek clone before the height opens so
-                    // it is not left sitting under the growing list. Collapsing
-                    // rebuilds it once the body has started clipping.
+                    // The peek grows in while the body slides away and shrinks out while it
+                    // opens, on the same clock: popping it in or out in one frame hopped
+                    // every row below the folder by a row height at each toggle.
                     if (newlyExpanded) {
-                        folderEl.querySelector(":scope > .library-workspace-folder-peek")?.remove();
+                        const peek = folderEl.querySelector(":scope > .library-workspace-folder-peek");
+                        if (peek) this._animateFolderPeek(peek, false);
                     }
                     this._animateFolderHeight(folderEl, newlyExpanded);
                     if (!newlyExpanded) {
-                        this._renderFolderPeek(folderEl, folder, wsId);
+                        this._renderFolderPeek(folderEl, folder, wsId, true);
                     }
                 }
             });
@@ -662,7 +634,7 @@
         // A collapsed folder holding the active tab peeks that tab below its
         // header. The content list stays collapsed-hidden; the peek is a
         // separate visible clone built with the normal tab renderer.
-        _renderFolderPeek(folderEl, folder, wsId) {
+        _renderFolderPeek(folderEl, folder, wsId, animate = false) {
             folderEl.querySelector(":scope > .library-workspace-folder-peek")?.remove();
             const items = folder.allItemsRecursive || folder.tabs || [];
             const isCollapsed = folder.hasAttribute("zen-folder-collapsed") || folder.collapsed;
@@ -671,6 +643,45 @@
             const peekEl = this.el("div", { className: "library-workspace-folder-peek" });
             this.renderTab(activeTab, peekEl, wsId);
             folderEl.appendChild(peekEl);
+            if (animate) this._animateFolderPeek(peekEl, true);
+        }
+
+        // Same 120ms ease-in-out as _animateFolderHeight so the folder's total height changes
+        // continuously: the body's shrink and the peek's growth overlap instead of the peek
+        // landing at full height in the frame the body starts sliding. A hide starts from
+        // whatever height a still-running show has reached; the node leaves the DOM at the end.
+        _animateFolderPeek(peekEl, show) {
+            const previous = peekEl._peekSlide;
+            peekEl._peekSlide = null;
+            // In-flight height while the old keyframes still fill; natural height once they are gone.
+            const inFlight = previous ? peekEl.getBoundingClientRect().height : null;
+            try { previous?.cancel(); } catch (e) { }
+            const natural = peekEl.getBoundingClientRect().height;
+
+            const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+            if (reduce || natural <= 0 || typeof peekEl.animate !== "function") {
+                if (!show) peekEl.remove();
+                return;
+            }
+
+            const start = inFlight ?? (show ? 0 : natural);
+            const from = { height: `${start}px`, opacity: Math.min(1, start / natural) };
+            const to = show ? { height: `${natural}px`, opacity: 1 } : { height: "0px", opacity: 0 };
+            const frames = [from, to];
+            peekEl.style.overflow = "clip";
+            const slide = peekEl.animate(frames, { duration: 120, easing: "ease-in-out", fill: "forwards" });
+            peekEl._peekSlide = slide;
+            slide.addEventListener("finish", () => {
+                if (peekEl._peekSlide !== slide) return;
+                peekEl._peekSlide = null;
+                if (!show) {
+                    peekEl.remove();
+                    return;
+                }
+                // Natural height again; the inline clip is only for the tween.
+                try { slide.cancel(); } catch (e) { }
+                peekEl.style.removeProperty("overflow");
+            });
         }
 
         _folderGroupStart(folderEl) {
@@ -2122,7 +2133,7 @@
         }
 
         async renameWorkspace(ws) {
-            const header = this.library.shadowRoot.querySelector(`.library-workspace-card[workspace-id="${ws.uuid}"] .library-workspace-name`);
+            const header = this.library.shadowRoot.querySelector(`.library-workspace-card[workspace-id="${CSS.escape(ws.uuid)}"] .library-workspace-name`);
             if (header) {
                 this.startInlineRename({ currentTarget: header }, ws);
             }

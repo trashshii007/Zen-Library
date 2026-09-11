@@ -26,8 +26,6 @@
             this._itemCount = 0;
             this._currentAudio = null;
             this._playingId = null;
-            this._playingCard = null;
-            this._durations = new Map();
             this._coverCache = new Map();
             this._fileCache = new Map(); // Cache for Gecko File objects
 
@@ -83,8 +81,6 @@
 
                 const clipboard = Cc["@mozilla.org/widget/clipboard;1"].getService(Ci.nsIClipboard);
                 clipboard.setData(transferable, null, Ci.nsIClipboard.kGlobalClipboard);
-
-                console.log("[MEDIA] File copied to clipboard:", item.filename);
             } catch (err) {
                 console.error("[MEDIA] Failed to copy file:", err);
             }
@@ -143,7 +139,6 @@
             const container = this.el("div", { className: "media-grid" });
             wrapper.appendChild(container);
             this._container = container;
-            this.library._mediaContainer = container; // Keep ref
             const token = ++this._renderToken;
             // Modules outlive a close/open cycle, so a limit paged up in a previous
             // session would otherwise render every card the user ever scrolled to.
@@ -570,14 +565,7 @@
             const visibleItems = mediaItems.slice(0, visibleLimit);
 
             const libWidth = parseFloat(this.library.style.getPropertyValue("--zen-library-width")) || 340;
-            let colCount = 1;
-            try {
-                if (window.ZenLibrarySpacesRenderer && window.ZenLibrarySpacesRenderer.calculateMediaColumns) {
-                    colCount = window.ZenLibrarySpacesRenderer.calculateMediaColumns(libWidth);
-                } else if (window.ZenLibrarySpaces && window.ZenLibrarySpaces.calculateMediaColumns) {
-                    colCount = window.ZenLibrarySpaces.calculateMediaColumns(libWidth);
-                }
-            } catch (e) { }
+            const colCount = window.ZenLibrarySpaces?.calculateMediaColumns?.(libWidth) || 1;
 
             const masonryWrapper = this.el("div", {
                 className: "media-masonry-wrapper"
@@ -1243,11 +1231,23 @@
                 try {
                     const newName = input.value.trim();
                     item.file.moveTo(item.file.parent, newName);
-                    // Update card title in place
+                    // Everything derived from the path follows it, or glance/drag/copy keep using the old file.
                     const card = this._container?.querySelector(`.media-card[data-id="${CSS.escape(item.id)}"]`);
-                    if (card) card.querySelector(".media-title").textContent = newName;
                     item.filename = newName;
-                    item.id = `local_${item.file.path}_${item.file.lastModifiedTime}`;
+                    item.targetPath = item.file.path;
+                    item.url = Services.io.newFileURI(item.file).spec;
+                    item.raw = { target: { path: item.file.path }, lastModified: item.timestamp };
+                    const oldId = item.id;
+                    item.id = `local_${item.file.path}_${item.timestamp}`;
+                    for (const cache of [this._coverCache, this._fileCache]) {
+                        if (cache.has(oldId)) { cache.set(item.id, cache.get(oldId)); cache.delete(oldId); }
+                    }
+                    if (this._playingId === oldId) this._playingId = item.id;
+                    if (card) {
+                        card.dataset.id = item.id;
+                        card.querySelector(".media-card-name").textContent = newName;
+                        card.title = `${newName}\n(Right-click for options)`;
+                    }
                 } catch (err) {
                     console.error("[ZenLibrary Media] Rename failed:", err);
                 }
@@ -1298,7 +1298,6 @@
                 }
             }
             this._playingId = null;
-            this._playingCard = null;
         }
 
         toggleAudio(item, cardEl) {
@@ -1309,7 +1308,6 @@
             }
             this._stopCurrentAudio();
             this._playingId = item.id;
-            this._playingCard = cardEl;
             this._currentAudio = new Audio(fileUrl);
 
             this._currentAudio.onended = () => {
@@ -1349,12 +1347,14 @@
                 }
 
                 const rect = event.currentTarget.getBoundingClientRect();
+                // openGlance refuses a load without a principal that may load the URL; file: needs the system one.
                 window.gZenGlanceManager.openGlance({
                     url: fileUrl,
                     clientX: rect.left,
                     clientY: rect.top,
                     width: rect.width,
-                    height: rect.height
+                    height: rect.height,
+                    triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()
                 });
             }
         }
@@ -1368,12 +1368,7 @@
             return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
         }
 
-        // [audit] LEAK-1 — this module had no destroy() at all, so ZenLibrary.destroy()'s
-        // cleanup loop skipped it entirely. Every cover-art blob: URL and a Gecko File
-        // object for every media file in the Downloads folder stayed pinned for the whole
-        // lifetime of the browser window, and a Sine rebuild added another set.
-        //
-        // Modelled on Easels.destroy(), which already did this correctly.
+        // [audit] LEAK-1 — every cover-art blob: URL and cached Gecko File is released here; without it they were pinned for the window's lifetime.
         destroy() {
             try { this._stopCurrentAudio(); } catch (e) { }
             this._disarmDragCancel();
@@ -1388,7 +1383,6 @@
 
             this._coverCache.clear();
             this._fileCache.clear();
-            this._durations.clear();
             this._scanCache = null;
             this._scanPromise = null;
             this._renderToken++;

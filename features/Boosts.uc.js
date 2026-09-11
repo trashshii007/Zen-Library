@@ -51,7 +51,7 @@
                         // registeredBoostForDomain returns false for disabled boosts,
                         // which would remove them from the list.
                         this._stale = true;
-                        if (this._container) this.renderList();
+                        if (this._container?.isConnected) this.renderList();
                     }
                 }
             };
@@ -150,7 +150,6 @@
                 console.error("[ZenLibrary Boosts] fetchBoosts error:", e);
             }
 
-            console.log(`[ZenLibrary Boosts] Found ${results.length} boosted domains`);
             this._items = results;
         }
 
@@ -442,5 +441,4 @@
     }
 
     window.ZenLibraryBoosts = ZenLibraryBoosts;
-    console.log("[ZenLibrary Boosts] Module loaded");
 })();

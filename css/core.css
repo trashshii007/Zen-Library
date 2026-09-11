@@ -172,7 +172,7 @@
 /* SIDEBAR */
 /* Divider per the PR: a soft gradient wash + faint offset shadow, no border. */
 #zen-library-sidebar-container {
-    -moz-window-dragging: drag;
+  -moz-window-dragging: drag;
   width: var(--zen-library-sidebar-width);
   min-width: var(--zen-library-sidebar-width);
   flex-shrink: 0;
@@ -192,18 +192,22 @@
   box-shadow: -9px 0 17px rgba(0, 0, 0, 0.04);
 }
 
-/* Window-buttons dock. Hidden while empty so the sidebar rhythm is unchanged
-   otherwise. The live .titlebar-buttonbox-container is slotted in from light
-   DOM (not cloned) so Firefox still toggles max vs restore on sizemode. */
+/* Window-buttons dock. Hidden unless the caption cluster will dock here, so the
+   sidebar rhythm is unchanged otherwise. The live .titlebar-buttonbox-container is
+   slotted in from light DOM (not cloned) so Firefox still toggles max vs restore on
+   sizemode. The row is opened at its measured height from the first frame of an open
+   (_reserveWindowButtonDock) and the node only lands at 60%: showing the row at that
+   point re-centred the whole sidebar mid-slide. */
 .zen-library-sidebar-top {
   display: none;
   align-items: center;
-  justify-content: flex-start;
   padding: 0 0 8px 0;
   justify-content: center;
   -moz-window-dragging: drag;
   flex-shrink: 0;
   width: 100%;
+  box-sizing: content-box;
+  height: var(--zen-library-window-buttons-height, auto);
 }
 
 :host([window-buttons]) .zen-library-sidebar-top {
