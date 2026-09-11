@@ -712,6 +712,26 @@
         // `tabChanged` or on the container being absent. By the time any of those callers
         // ran, the grid existed and the tab had not changed — so the Easels list never
         // refreshed in place, and typing in its search box did nothing at all.
+        // Native zen-library: 84px sidebar + 27rem content (media/spaces size themselves). Never wider than 95vw.
+        // Pure DOM-free math so the controller can apply it before the host is inserted and styled for the first time.
+        applyTargetWidth() {
+            let targetWidth = 516;
+            if (this.activeTab === "spaces" && window.ZenLibrarySpaces) {
+                const ws = window.ZenLibrarySpaces.getWorkspaces();
+                targetWidth = window.ZenLibrarySpaces.calculatePanelWidth(ws.length);
+            } else if (this.activeTab === "media") {
+                const count = window.gZenLibraryMediaCount ?? 0;
+                if (window.ZenLibrarySpaces?.calculateMediaWidth) targetWidth = window.ZenLibrarySpaces.calculateMediaWidth(count);
+            } else if (this.activeTab === "easels") {
+                // The fluid two-column grid is exact at 84 sidebar + 36 side padding + 320 cards + 18 gap.
+                targetWidth = 458;
+            }
+            targetWidth = Math.min(Math.max(targetWidth, 516), window.innerWidth * 0.95);
+            this._lastTargetWidth = targetWidth;
+            this.style.setProperty("--zen-library-width", `${targetWidth}px`);
+            return targetWidth;
+        }
+
         update(force = false) {
             this._updateDepth = (this._updateDepth || 0) + 1;
             try {
@@ -721,32 +741,13 @@
                     return;
                 }
 
-                // Native zen-library: 84px sidebar + 27rem content (media/spaces size themselves). Never wider than 95vw.
-                let targetWidth = 516;
-                // Assuming ZenLibrarySpaces is available on window if Spaces module loaded
-                if (this.activeTab === "spaces" && window.ZenLibrarySpaces) {
-                    const ws = window.ZenLibrarySpaces.getWorkspaces();
-                    targetWidth = window.ZenLibrarySpaces.calculatePanelWidth(ws.length);
-                } else if (this.activeTab === "media") {
-                    const count = window.gZenLibraryMediaCount ?? 0;
-                    if (window.ZenLibrarySpaces && window.ZenLibrarySpaces.calculateMediaWidth) {
-                        targetWidth = window.ZenLibrarySpaces.calculateMediaWidth(count);
-                    } else {
-                        targetWidth = 516;
-                    }
-                } else if (this.activeTab === "easels") {
-                    // The fluid two-column grid is exact at 84 sidebar + 36 side padding + 320 cards + 18 gap.
-                    targetWidth = 458;
-                }
-
-                targetWidth = Math.min(Math.max(targetWidth, 516), window.innerWidth * 0.95);
-                this._lastTargetWidth = targetWidth;
+                // Width first: _measureToolboxWidth flushes style, and the host must never be styled at the 516px default or it transitions from there.
+                const targetWidth = this.applyTargetWidth();
 
                 // PR shift: panel width minus the live toolbox width; measured by the controller so the tween agrees.
                 const toolboxWidth = window.gZenLibrary?._measureToolboxWidth?.() ?? 0;
                 const offset = Math.max(0, targetWidth - toolboxWidth);
 
-                this.style.setProperty("--zen-library-width", `${targetWidth}px`);
                 document.documentElement.style.setProperty("--zen-library-offset", `${offset}px`);
                 // The content shift follows the live (transitioning) width via the controller's ResizeObserver.
                 window.gZenLibrary?._syncShift?.();
@@ -1029,6 +1030,7 @@
             this._sidebarModeAttrObserver = null;
             this._sidebarModeSyncFrame = 0;
             this._springControls = null;
+            this._openTween = null;
             this._openProgress = 0;
 
             // Initialize Store
@@ -1454,9 +1456,29 @@
             try { document.getElementById("urlbar")?.blur?.(); } catch (e) { }
         }
 
-        // Re-derives the content shift from the panel's live width outside a tween (section width transition, window resize).
+        // Re-derives the content shift from the panel's live width (section width transition, window resize); mid-tween it re-aims the wrapper instead.
         _syncShift() {
-            if (this._element?.parentNode && !this._isTransitioning) this._setOpenProgress(this._openProgress);
+            if (!this._element?.parentNode) return;
+            if (this._isTransitioning) this._retargetWrapperTween();
+            else this._setOpenProgress(this._openProgress);
+        }
+
+        // The panel resized under a running tween (Spaces/Media sizing, tab switch): replace the wrapper keyframes with the new shift on the host's clock, so the page never lands short of the panel and snaps.
+        _retargetWrapperTween() {
+            const tween = this._openTween;
+            const wrapper = document.getElementById("zen-appcontent-wrapper");
+            if (!tween || !wrapper || !this._openAnimations) return;
+            const shift = this._measureShift();
+            if (shift === tween.shift) return;
+            tween.shift = shift;
+            document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${shift}px`);
+            const anim = wrapper.animate(tween.frames("wrapper", shift), tween.opts);
+            if (tween.host.startTime !== null) anim.startTime = tween.host.startTime;
+            const index = this._openAnimations.indexOf(tween.wrapper);
+            try { tween.wrapper.cancel(); } catch (e) { }
+            if (index >= 0) this._openAnimations[index] = anim;
+            else this._openAnimations.push(anim);
+            tween.wrapper = anim;
         }
 
         _watchPanelSize(el) {
@@ -1533,24 +1555,25 @@
             this._hiddenUrlbarNodes = null;
         }
 
-        // getComputedStyle flushes layout, so margins are read once per panel
-        // open and cached; the border box itself is still measured live.
+        // getComputedStyle flushes layout, so margins and borders are read once per panel
+        // open and cached; the padding box itself is still measured live.
+        // clientWidth, not bounding rects: those include the toolbox's scale(0.96), which is
+        // still applied when the open tween hands off, so the rest shift came out ~4% of the
+        // toolbox too wide and the page hopped by that much on landing.
         _measureBoxOccupied(el) {
             try {
                 this._boxMarginCache ||= new Map();
-                let margins = this._boxMarginCache.get(el);
-                if (margins === undefined) {
-                    margins = 0;
+                let extra = this._boxMarginCache.get(el);
+                if (extra === undefined) {
+                    extra = 0;
                     try {
                         const cs = getComputedStyle(el);
-                        margins = (parseFloat(cs.marginLeft) || 0) + (parseFloat(cs.marginRight) || 0);
+                        extra = ["marginLeft", "marginRight", "borderLeftWidth", "borderRightWidth"]
+                            .reduce((sum, prop) => sum + (parseFloat(cs[prop]) || 0), 0);
                     } catch (e) { }
-                    this._boxMarginCache.set(el, margins);
+                    this._boxMarginCache.set(el, extra);
                 }
-                const raw = window.windowUtils?.getBoundsWithoutFlushing
-                    ? window.windowUtils.getBoundsWithoutFlushing(el).width
-                    : el.getBoundingClientRect().width;
-                return (raw || 0) + margins;
+                return (el.clientWidth || 0) + extra;
             } catch (e) {
                 return 0;
             }
@@ -1597,6 +1620,7 @@
                 try { anim.cancel(); } catch (e) { }
             }
             this._openAnimations = null;
+            this._openTween = null;
             if (this._dockTimer) {
                 clearTimeout(this._dockTimer);
                 this._dockTimer = null;
@@ -1608,7 +1632,8 @@
 
         // Signed content shift for the current panel width (panel minus the in-flow toolbox).
         _measureShift() {
-            let panelWidth = this._lastTargetWidth || 0;
+            // The element owns the target width (update() sets it); before first layout the live box is 0 and this is all there is.
+            let panelWidth = this._element?._lastTargetWidth || 0;
             if (this._element?.parentNode && window.windowUtils?.getBoundsWithoutFlushing) {
                 const live = window.windowUtils.getBoundsWithoutFlushing(this._element).width;
                 if (live > 0) panelWidth = live;
@@ -1663,11 +1688,11 @@
                 const opts = { duration, easing: `cubic-bezier(${this._animationEasing().join(", ")})`, fill: "forwards" };
                 const shift = this._measureShift();
                 const clamp = 2 / 3;
-                const frames = (key) => {
-                    const list = [{ ...this._keyframesAt(from, shift)[key], offset: 0 }];
+                const frames = (key, px = shift) => {
+                    const list = [{ ...this._keyframesAt(from, px)[key], offset: 0 }];
                     // The fade clamps at 2/3; when the segment crosses it, keep that stop so the fade stays linear to zero like native.
-                    if ((from - clamp) * (target - clamp) < 0) list.push({ ...this._keyframesAt(clamp, shift)[key], offset: (clamp - from) / (target - from) });
-                    list.push({ ...this._keyframesAt(target, shift)[key], offset: 1 });
+                    if ((from - clamp) * (target - clamp) < 0) list.push({ ...this._keyframesAt(clamp, px)[key], offset: (clamp - from) / (target - from) });
+                    list.push({ ...this._keyframesAt(target, px)[key], offset: 1 });
                     return list;
                 };
                 document.documentElement.style.setProperty("--zen-library-wrapper-target-px", `${shift}px`);
@@ -1675,12 +1700,15 @@
                 const toolbox = document.getElementById("navigator-toolbox");
                 if (toolbox) anims.push(toolbox.animate(frames("toolbox"), opts));
                 const wrapper = document.getElementById("zen-appcontent-wrapper");
-                if (wrapper) anims.push(wrapper.animate(frames("wrapper"), opts));
+                const wrapperAnim = wrapper?.animate(frames("wrapper"), opts);
+                if (wrapperAnim) anims.push(wrapperAnim);
                 for (const node of this._hiddenUrlbarNodes || []) {
                     node.style.removeProperty("visibility");
                     anims.push(node.animate(frames("urlbar"), opts));
                 }
                 this._openAnimations = anims;
+                // What _retargetWrapperTween needs to rebuild the wrapper leg if the panel resizes mid-tween.
+                this._openTween = wrapperAnim ? { host: anims[0], wrapper: wrapperAnim, frames, opts, shift } : null;
                 // Caption buttons dock at 60% of an open and undock as a close starts.
                 if (target > from) {
                     const at = duration * Math.max(0, (0.6 - from) / (target - from));
@@ -2180,6 +2208,8 @@
             this._element.style.visibility = "visible";
             this._element.style.opacity = "";
             this._applyAnimationSettings(this._element);
+            // Before insertion: connectedCallback flushes style, and a host first styled at the 516px default would width-transition to its real size under the tween.
+            try { this._element.applyTargetWidth(); } catch (e) { }
             this._setOpenProgress(0);
 
             if (isRightSide) b.append(this._element);
