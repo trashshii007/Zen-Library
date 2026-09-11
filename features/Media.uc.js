@@ -1339,24 +1339,28 @@
             });
         }
 
-        showGlance(item, event) {
-            const fileUrl = item.url;
-            if (window.gZenGlanceManager) {
-                if (window.gZenGlanceManager.closeGlance) {
-                    window.gZenGlanceManager.closeGlance();
-                }
+        async showGlance(item, event) {
+            const mgr = window.gZenGlanceManager;
+            const card = event.currentTarget;
+            if (!mgr || !card) return;
+            // openGlance returns the open glance while one exists and closeGlance animates, so wait for it or the click is lost.
+            try { await mgr.closeGlance?.(); } catch (e) { }
+            if (!card.isConnected || this.library?.activeTab !== "media") return;
 
-                const rect = event.currentTarget.getBoundingClientRect();
-                // openGlance refuses a load without a principal that may load the URL; file: needs the system one.
-                window.gZenGlanceManager.openGlance({
-                    url: fileUrl,
-                    clientX: rect.left,
-                    clientY: rect.top,
-                    width: rect.width,
-                    height: rect.height,
-                    triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()
-                });
-            }
+            const rect = card.getBoundingClientRect();
+            const panels = window.windowUtils.getBoundsWithoutFlushing(window.gBrowser.tabpanels);
+            // Glance origins are relative to #tabbrowser-tabpanels; animator.css translates the overlay back by the content shift, so remove that from the panel's left too.
+            const wrapperTransform = getComputedStyle(document.getElementById("zen-appcontent-wrapper")).transform;
+            const shift = wrapperTransform === "none" ? 0 : new DOMMatrix(wrapperTransform).m41;
+            // openGlance refuses a load without a principal that may load the URL; file: needs the system one.
+            mgr.openGlance({
+                url: item.url,
+                clientX: rect.left - (panels.left - shift),
+                clientY: rect.top - panels.top,
+                width: rect.width,
+                height: rect.height,
+                triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()
+            });
         }
 
         formatBytes(bytes, decimals = 2) {
