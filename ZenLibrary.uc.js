@@ -684,6 +684,10 @@
             try { window.gZenLibrary?._restoreWindowButtons(); } catch (e) { }
         }
 
+        _atgCompatEnabled() {
+            try { return Services.prefs.getBoolPref("zen.library.compat.advanced-tab-groups", false); } catch (e) { return false; }
+        }
+
         // Native zen-library: 84px sidebar + 27rem content (media/spaces size themselves). Never wider than 95vw.
         // Pure DOM-free math so the controller can apply it before the host is inserted and styled for the first time.
         applyTargetWidth() {
@@ -706,6 +710,11 @@
 
         // `force` re-renders the current section in place (Easels after an index change, rename, delete or search).
         update(force = false) {
+            // ATG compat: its tab-strip hooks call update(true) on every tab move/close/drop; only Spaces reads that tree.
+            if (force && this.activeTab !== "spaces" && this._atgCompatEnabled() &&
+                String(Components.stack.caller?.filename || "").includes("advanced-tab-groups")) {
+                force = false;
+            }
             this._updateDepth = (this._updateDepth || 0) + 1;
             try {
                 // Check if custom elements are properly registered
@@ -1341,7 +1350,8 @@
                 this._boxMarginCache = null;
                 this._syncRightSidePlacement();
                 this._syncLibraryOpenModeAttributes();
-                this.update(true);
+                // Width, offset and shift only; the section's content does not depend on the sidebar mode.
+                this.update();
                 this._setOpenProgress(this._openProgress);
                 // After the dock decision above: a mode change can move the cluster in or out of the toolbox.
                 this._reserveWindowButtonDock();

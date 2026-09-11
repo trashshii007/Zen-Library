@@ -337,6 +337,8 @@
 /* No top padding here: every section header carries the PR's 12px top
    spacing itself, so all search bars start at the same height. */
 #zen-library-main-panel {
+  /* The window-drag region is drag-minus-no-drag frames regardless of z-order, so the titlebar strip under this panel would otherwise swallow clicks. */
+  -moz-window-dragging: no-drag;
   width: calc(var(--zen-library-width) - var(--zen-library-sidebar-width));
   min-width: 200px;
   height: 100%;
@@ -384,7 +386,6 @@
   display: grid;
   grid-template-columns: 1fr;
   padding: 12px 14px 8px;
-  -moz-window-dragging: no-drag;
   font-size: 14px;
   --zen-library-radius: 12px;
   --zen-library-pill-bg: color-mix(in srgb, currentColor 7%, transparent);
