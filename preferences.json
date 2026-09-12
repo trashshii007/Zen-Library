@@ -111,12 +111,12 @@
   {
     "type": "checkbox",
     "property": "zen.library.compat.advanced-tab-groups",
-    "label": "Advanced Tab Groups compatibility",
-    "defaultValue": false
+    "label": "Advanced Tab Groups integration",
+    "defaultValue": true
   },
   {
     "type": "text",
-    "label": "Only for the Advanced Tab Groups mod, which renders plain tab groups in the Spaces section. Fixes its collapse snapping when a group holds the active tab, keeps that tab visible under the collapsed header like the sidebar, and stops its tab-strip hooks from rebuilding the other sections on every tab move or close. Restart Zen after changing.",
+    "label": "With the Advanced Tab Groups mod installed, the Library renders its tab groups in the Spaces section itself instead of letting the mod patch in its own rows: groups expand and collapse like folders (the active tab stays visible under a collapsed header), can be dragged to reorder, nested into other groups, moved between spaces, and turned into a folder by dropping them in the pinned area — a folder dropped among the unpinned tabs becomes a tab group. Also keeps the mod's tab-strip hooks from rebuilding the panel on every tab move or close. Off: the mod's own Library rendering is used. Restart Zen after changing.",
     "size": "12px",
     "margin": "0 0 8px 0"
   }

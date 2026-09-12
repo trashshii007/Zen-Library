@@ -710,9 +710,15 @@
 
         // `force` re-renders the current section in place (Easels after an index change, rename, delete or search).
         update(force = false) {
-            // ATG compat: its tab-strip hooks call update(true) on every tab move/close/drop; only Spaces reads that tree.
-            if (force && this.activeTab !== "spaces" && this._atgCompatEnabled() &&
+            // ATG compat: its tab-strip hooks call update(true) on every tab move/close/drop. Only Spaces reads
+            // that tree, and there a card repaint keeps every list's scroll position where a grid rebuild would not.
+            if (force && this._atgCompatEnabled() &&
                 String(Components.stack.caller?.filename || "").includes("advanced-tab-groups")) {
+                if (this.activeTab === "spaces" && this.spaces?.refreshAllCards && this.shadowRoot.querySelector(".library-workspace-grid")) {
+                    // A drop handled here already repainted; ATG's debounced sync lands ~150ms later.
+                    this.spaces.refreshAllCards({ skipIfFresherThan: 400 });
+                    return;
+                }
                 force = false;
             }
             this._updateDepth = (this._updateDepth || 0) + 1;

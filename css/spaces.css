@@ -304,6 +304,7 @@
     .library-workspace-item,
     .library-split-view-group,
     .library-workspace-folder[drag-over="into"] > .library-workspace-item.folder::before,
+    .library-workspace-tab-group[drag-over="into"] > .library-workspace-item.atg-tab-group::before,
     .library-tab-close-button {
         corner-shape: superellipse(var(--zen-squircle-value));
     }
@@ -361,12 +362,14 @@
     transform: translate(calc(-1 * var(--library-drop-indicator-height)), -50%);
 }
 
-.library-workspace-folder[drag-over="into"] > .library-workspace-item.folder {
+.library-workspace-folder[drag-over="into"] > .library-workspace-item.folder,
+.library-workspace-tab-group[drag-over="into"] > .library-workspace-item.atg-tab-group {
     overflow: visible;
     z-index: 2;
 }
 
-.library-workspace-folder[drag-over="into"] > .library-workspace-item.folder::before {
+.library-workspace-folder[drag-over="into"] > .library-workspace-item.folder::before,
+.library-workspace-tab-group[drag-over="into"] > .library-workspace-item.atg-tab-group::before {
     content: "";
     position: absolute;
     inset: 2px;
@@ -514,13 +517,13 @@
     width: 100%;
 }
 
-.library-workspace-grid[dragging-tab] .library-workspace-folder,
-.library-workspace-grid[dragging-folder] .library-workspace-folder {
+.library-workspace-grid[dragging-tab] :is(.library-workspace-folder, .library-workspace-tab-group),
+.library-workspace-grid[dragging-group] :is(.library-workspace-folder, .library-workspace-tab-group) {
     position: relative;
 }
 
-.library-workspace-grid[dragging-tab] .library-workspace-folder::after,
-.library-workspace-grid[dragging-folder] .library-workspace-folder::after {
+.library-workspace-grid[dragging-tab] :is(.library-workspace-folder, .library-workspace-tab-group)::after,
+.library-workspace-grid[dragging-group] :is(.library-workspace-folder, .library-workspace-tab-group)::after {
     content: "";
     position: absolute;
     z-index: 2;
@@ -636,6 +639,226 @@
 }
 
 
+/* === 6b. TAB GROUPS (plain tab-group: Advanced Tab Groups or any non-folder group) ===
+
+   Same class names Advanced Tab Groups' own Library renderer used, because other mods
+   (tree connectors, folder-look) style these rows through them. The wrapper and body
+   follow the folder mechanics above: the body is a flex column with a zero-height
+   spacer whose margin-top slides the rows up under the header (_animateFolderHeight),
+   and a collapsed group holding the active tab peeks it below the header. */
+
+.library-workspace-tab-group {
+    /* ATG's 12px body inset, through the folder token so the peek row and any mod override (tree connectors) line up with it. */
+    --zen-folder-indent: 12px;
+    --atg-tab-group-color: var(--ws-primary-color, var(--zen-primary-color));
+    --atg-tab-group-stroke: light-dark(
+        color-mix(in srgb, var(--zen-primary-color) 60%, black),
+        color-mix(in srgb, var(--zen-colors-primary) 20%, var(--toolbox-textcolor))
+    );
+    --atg-tab-group-textcolor: var(--tab-selected-textcolor);
+    flex-shrink: 0;
+    width: 100%;
+}
+
+.library-workspace-item.atg-tab-group {
+    gap: 8px;
+    padding-inline: 0;
+    color: var(--atg-tab-group-textcolor);
+    overflow: visible;
+}
+
+/* The group holding the selected tab marks its header; the tab row is the one that gets the selected look. */
+.library-workspace-item.atg-tab-group.selected {
+    background: transparent;
+    box-shadow: none;
+}
+
+.library-workspace-item.atg-tab-group .item-label {
+    font-weight: 400;
+    color: var(--atg-tab-group-textcolor);
+}
+
+.library-workspace-item.atg-tab-group:hover .item-label {
+    mask-image: linear-gradient(to left, transparent 56px, black 68px);
+}
+
+.library-workspace-tab-group.collapsed > .library-workspace-tab-group-content {
+    pointer-events: none;
+}
+
+.library-workspace-tab-group-content {
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    margin-inline-start: var(--zen-folder-indent, 12px);
+    overflow-y: clip;
+}
+
+.library-workspace-tab-group-content[hidden] {
+    display: none;
+}
+
+/* ATG's group-colour rail down the body's inline edge, grain overlay included. */
+.library-workspace-tab-group-content::after {
+    content: "";
+    position: absolute;
+    left: -2px;
+    top: 0;
+    width: 2px;
+    height: 100%;
+    pointer-events: none;
+    background: var(--atg-tab-group-color);
+}
+
+.library-workspace-tab-group[show-grain="true"] .library-workspace-tab-group-content::before {
+    content: "";
+    position: absolute;
+    left: -2px;
+    top: 0;
+    width: 2px;
+    height: 100%;
+    pointer-events: none;
+    background-image: url("chrome://browser/content/zen-images/grain-bg.png");
+    opacity: var(--group-grain, 0);
+    mix-blend-mode: overlay;
+    z-index: 2;
+}
+
+.atg-tab-group-icon {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    position: relative;
+    margin-inline-start: var(--tab-inline-padding);
+    fill: var(--atg-tab-group-stroke);
+    background: var(--atg-tab-group-color);
+    overflow: hidden;
+    flex-shrink: 0;
+    transition: background-color 0.15s ease, fill 0.15s ease;
+}
+
+.atg-tab-group-icon.has-custom-icon {
+    color: var(--atg-tab-group-stroke);
+}
+
+.atg-tab-group-icon .group-icon {
+    display: block;
+    width: 12px;
+    height: 12px;
+    fill: white;
+    -moz-context-properties: fill, fill-opacity;
+}
+
+.atg-tab-group-icon label {
+    transform: translate(0, -1px);
+    font-size: 11px;
+    line-height: 16px;
+}
+
+.atg-tab-group-icon-fallback {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    background: var(--atg-tab-group-stroke);
+    opacity: 0.9;
+}
+
+/* Convert-to-folder and close, on hover only, like the tab rows' close button. */
+.atg-tab-group-folder-button,
+.atg-tab-group-close-button {
+    width: var(--size-item-medium, 24px);
+    height: var(--size-item-medium, 24px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--tab-border-radius, 8px);
+    flex-shrink: 0;
+    cursor: pointer;
+    color: inherit;
+    opacity: 0;
+    pointer-events: none;
+    background: transparent;
+}
+
+.atg-tab-group-close-button {
+    margin-inline-end: 6px;
+}
+
+.atg-tab-group-folder-button .icon-mask,
+.atg-tab-group-close-button .icon-mask {
+    width: 14px;
+    height: 14px;
+    background-color: currentColor;
+    mask-size: contain;
+    mask-repeat: no-repeat;
+    mask-position: center;
+    pointer-events: none;
+}
+
+.atg-tab-group-folder-button .icon-mask {
+    mask-image: url("chrome://browser/skin/zen-icons/folder.svg");
+}
+
+.atg-tab-group-close-button .icon-mask {
+    mask-image: url("chrome://browser/skin/zen-icons/close.svg");
+}
+
+.library-workspace-item.atg-tab-group:hover :is(.atg-tab-group-folder-button, .atg-tab-group-close-button) {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.atg-tab-group-folder-button:hover,
+.atg-tab-group-close-button:hover {
+    background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+/* ATG's arc-style / fill-folders / theme-folders: flat headers that never collapse. */
+@media (-moz-pref("browser.tabs.groups.arc-style")), (-moz-pref("tab.groups.fill-folders")), (-moz-pref("tab.groups.theme-folders")) {
+    .library-workspace-item.atg-tab-group {
+        min-height: 30px;
+        padding-inline-start: var(--tab-inline-padding);
+    }
+
+    .library-workspace-item.atg-tab-group:hover {
+        background: transparent;
+    }
+
+    .atg-tab-group-icon {
+        display: none;
+        background: none;
+        margin: 0;
+    }
+
+    .atg-tab-group-icon.has-custom-icon {
+        display: flex;
+    }
+
+    .atg-tab-group-icon .group-icon {
+        width: 14px;
+        height: 14px;
+        fill: light-dark(black, white);
+    }
+
+    .library-workspace-item.atg-tab-group .item-label {
+        color: color-mix(in srgb, var(--atg-tab-group-textcolor) 70%, transparent);
+        font-weight: 600;
+    }
+
+    .library-workspace-tab-group-content {
+        margin-inline-start: 5px;
+    }
+
+    .library-workspace-tab-group-content::after,
+    .library-workspace-tab-group[show-grain="true"] .library-workspace-tab-group-content::before {
+        content: none;
+    }
+}
+
+
 /* === 7. SPLIT VIEW GROUPS === */
 
 .library-split-view-group {
@@ -706,7 +929,7 @@
 }
 
 .library-workspace-grid[dragging-tab] .library-workspace-separator-container:is([no-unpinned], [no-pinned]),
-.library-workspace-grid[dragging-folder] .library-workspace-separator-container:is([no-unpinned], [no-pinned]) {
+.library-workspace-grid[dragging-group] .library-workspace-separator-container:is([no-unpinned], [no-pinned]) {
     display: flex;
 }
 
@@ -715,13 +938,13 @@
 }
 
 .library-workspace-grid[dragging-tab] .library-workspace-cleanup-button,
-.library-workspace-grid[dragging-folder] .library-workspace-cleanup-button {
+.library-workspace-grid[dragging-group] .library-workspace-cleanup-button {
     pointer-events: none !important;
 }
 
 /* Widen the hit area without moving the line: dropping on a 1px target is not viable. */
 .library-workspace-grid[dragging-tab] .library-workspace-separator-container::before,
-.library-workspace-grid[dragging-folder] .library-workspace-separator-container::before {
+.library-workspace-grid[dragging-group] .library-workspace-separator-container::before {
     content: "";
     position: absolute;
     inset-inline: 0;
@@ -737,27 +960,18 @@
     flex-direction: column;
 }
 
-.library-workspace-unpinned-mask {
-    display: block;
-    opacity: 0;
-    pointer-events: none;
-    position: absolute;
-    inset: 0;
-    z-index: 6;
-    border-radius: 8px;
-    background: light-dark(
-        color-mix(in srgb, black 32%, transparent),
-        color-mix(in srgb, black 52%, transparent)
-    );
-    transition: opacity 0.15s ease;
+/* A group crossing the separator converts (folder <-> tab group): dash the line so the drop reads differently. */
+.library-workspace-grid[drop-converts] #library-tab-drop-indicator {
+    background: repeating-linear-gradient(to right, var(--library-drop-indicator-bg) 0 6px, transparent 6px 10px);
 }
 
-.library-workspace-grid[dragging-folder] .library-workspace-unpinned-mask {
-    opacity: 1;
+.library-workspace-grid[drop-converts] #library-tab-drop-indicator::before {
+    border-style: dashed;
 }
 
-.library-workspace-grid[dragging-folder] .library-workspace-unpinned-section {
-    pointer-events: none;
+.library-workspace-grid[drop-converts] :is(.library-workspace-folder, .library-workspace-tab-group)[drag-over="into"] > .library-workspace-item::before {
+    outline: 2px dashed color-mix(in srgb, var(--ws-text-color, currentColor) 60%, transparent);
+    outline-offset: -2px;
 }
 
 .library-workspace-separator-container[drag-over] .library-workspace-separator {
