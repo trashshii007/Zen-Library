@@ -580,17 +580,7 @@
                 columns.push(col);
             }
 
-            // Smooth vertical scrolling
-            grid.onwheel = (e) => {
-                if (e.deltaY !== 0) {
-                    e.preventDefault();
-                    if (e.deltaMode === 1) {
-                        grid.scrollBy({ top: e.deltaY * 37.5, behavior: "smooth" });
-                    } else {
-                        grid.scrollTop += e.deltaY * 2.5;
-                    }
-                }
-            };
+            // No wheel handler: .media-grid is an ordinary vertical scroller, so native (smooth, APZ) scrolling applies like every other list.
 
             visibleItems.forEach((item, index) => {
                 const ext = item.filename.split('.').pop().toLowerCase();
