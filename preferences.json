@@ -35,14 +35,14 @@
   },
   {
     "type": "text",
-    "label": "Zen Library takes over Ctrl+H and Ctrl+J so they open its own History and Downloads sections instead of Firefox's panels. Turn either off to hand the key back — to the native panel, and to web pages that bind it.",
+    "label": "Zen Library takes over Ctrl+H and Ctrl+J so they open its own History and Downloads sections instead of Firefox's panels. The History switch also covers Firefox's Show All History command (Ctrl+Shift+H, History ▸ Manage history). Turn either off to hand the key back — to the native panel, and to web pages that bind it.",
     "size": "12px",
     "margin": "0 0 8px 0"
   },
   {
     "type": "checkbox",
     "property": "zen.library.shortcut.history",
-    "label": "Ctrl+H (Cmd+H on macOS) opens the Library's History",
+    "label": "Ctrl+H (Cmd+H on macOS) and Show All History open the Library's History",
     "defaultValue": true
   },
   {
@@ -57,6 +57,29 @@
     "margin": "20px 0 10px 0"
   },
   {
+    "type": "dropdown",
+    "property": "zen.library.downloads.click-action",
+    "label": "Clicking a download",
+    "defaultValue": "open",
+    "placeholder": "Select an option",
+    "options": [
+      {
+        "label": "Opens the file",
+        "value": "open"
+      },
+      {
+        "label": "Shows it in its folder",
+        "value": "show"
+      }
+    ]
+  },
+  {
+    "type": "text",
+    "label": "Both actions are always available from the row's ⋯ menu. Applies to the next click.",
+    "size": "12px",
+    "margin": "0 0 8px 0"
+  },
+  {
     "type": "checkbox",
     "property": "zen.library.downloads.scan-folder",
     "label": "Also show files from the Downloads folder",
@@ -64,7 +87,7 @@
   },
   {
     "type": "text",
-    "label": "When enabled, the Downloads section lazily scans your Downloads folder and adds top-level files or folders Firefox no longer has in its download history. Folder contents are not shown separately. Changes apply immediately while the panel is open.",
+    "label": "When enabled, the Downloads section also lists top-level files and folders in your Downloads folder that are no longer in the download history (hidden and partial files are skipped, folder contents are not listed). The folder is read off the main thread and cached for 30 seconds. Changes apply immediately while the panel is open.",
     "size": "12px",
     "margin": "0 0 8px 0"
   },

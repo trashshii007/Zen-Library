@@ -9,6 +9,7 @@
     border-radius: 18px;
 }
 
+/* Favicon on a tile tinted from the workspace accent; disabled rows get a diagonal cut through tile and icon. */
 .zen-library-boost-icon {
     display: flex;
     align-items: center;
@@ -24,11 +25,8 @@
     content: "";
     position: absolute;
     inset: 0;
-    box-sizing: border-box;
     border-radius: 10px;
-    border: 3px solid white;
-    background: #edededaa;
-    box-shadow: 0 0 6px 1px rgba(0, 0, 0, 0.1);
+    background: color-mix(in srgb, var(--zen-primary-color, currentColor) 18%, transparent);
 }
 
 .zen-library-boost-icon img {
@@ -72,7 +70,7 @@
     width: 135%;
     height: 4px;
     border-radius: 10px;
-    background: light-dark(rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.5));
+    background: color-mix(in srgb, var(--zen-primary-color, currentColor) 55%, transparent);
     transform: translate(-50%, -50%) rotate(45deg);
     pointer-events: none;
 }

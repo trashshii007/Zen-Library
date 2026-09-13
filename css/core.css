@@ -681,6 +681,18 @@
   display: none;
 }
 
+/* Rows with a `hover-subtitle` attribute swap it in for the subtitle on hover / while their menu is open. */
+.library-list-item .item-subtitle-hover,
+.library-list-item:hover .item-subtitle-rest,
+.library-list-item[menu-open] .item-subtitle-rest {
+  display: none;
+}
+
+.library-list-item:hover .item-subtitle-hover,
+.library-list-item[menu-open] .item-subtitle-hover {
+  display: inline;
+}
+
 /* EMPTY STATE */
 .empty-state {
   display: flex;

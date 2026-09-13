@@ -55,7 +55,7 @@
         }
 
         static get observedAttributes() {
-            return ['title', 'subtitle', 'time', 'icon', 'status'];
+            return ['title', 'subtitle', 'hover-subtitle', 'time', 'icon', 'status'];
         }
 
         attributeChangedCallback(name, oldValue, newValue) {
@@ -138,6 +138,7 @@
             const iconUrl = this.getAttribute('icon') || (this._item ? this._item.icon : '');
             const titleVal = this.getAttribute('title') || (this._item ? this._item.title : '');
             const subtitleVal = this.getAttribute('subtitle') || (this._item ? this._item.subtitle : '');
+            const hoverSubtitleVal = this.getAttribute('hover-subtitle') || (this._item ? this._item.hoverSubtitle : '');
             const timeVal = this.getAttribute('time') || (this._item ? this._item.time : '');
 
             // [audit] SEC-3 — was url('${iconUrl}') with no escaping, fed page-icon:<history
@@ -150,7 +151,19 @@
                     `url("${window.ZenLibraryUtil.cssUrl(iconUrl)}")`;
             }
             this._elements.title.textContent = titleVal;
-            this._elements.subtitle.textContent = subtitleVal;
+            // A hover subtitle swaps in on :hover / [menu-open] (core.css). Built here, not by the
+            // section, because every attribute change re-runs this and would flatten it to text.
+            if (hoverSubtitleVal) {
+                const rest = document.createElement('span');
+                rest.className = "item-subtitle-rest";
+                rest.textContent = subtitleVal;
+                const hover = document.createElement('span');
+                hover.className = "item-subtitle-hover";
+                hover.textContent = hoverSubtitleVal;
+                this._elements.subtitle.replaceChildren(rest, hover);
+            } else {
+                this._elements.subtitle.textContent = subtitleVal;
+            }
             this._elements.time.textContent = timeVal;
 
             // Update status class based on _item data
@@ -974,6 +987,7 @@
             this._onWheel = this._onWheel.bind(this);
             this._onMozSwipeGesture = this._onMozSwipeGesture.bind(this);
             this._onShowAllHistoryCommand = this._onShowAllHistoryCommand.bind(this);
+            this._showAllHistoryCommand = null;
             this._wheelGesture = { totalX: 0, lastTime: 0, mode: null };
             this._mozSwipeGesture = { active: false, mode: null };
             this._initTimer = null;
@@ -1077,13 +1091,15 @@
             this.destroy({ widget: false });
         }
 
+        // Browser:ShowAllHistory is what Ctrl+Shift+H, History ▸ Manage history and the app
+        // menu entry all dispatch. Firefox handles it from a bubble listener on the
+        // #placesCommands commandset (places-commands.js), so a capture listener on the
+        // <command> itself sees it first and stopPropagation() keeps the Library window shut.
         _watchShowAllHistoryCommand() {
             try {
                 const command = document.getElementById("Browser:ShowAllHistory");
                 if (!command || this._showAllHistoryCommand === command) return;
-                if (this._showAllHistoryCommand) {
-                    this._showAllHistoryCommand.removeEventListener("command", this._onShowAllHistoryCommand, true);
-                }
+                this._unwatchShowAllHistoryCommand();
                 this._showAllHistoryCommand = command;
                 command.addEventListener("command", this._onShowAllHistoryCommand, true);
             } catch (e) {
@@ -1091,10 +1107,21 @@
             }
         }
 
+        _unwatchShowAllHistoryCommand() {
+            if (!this._showAllHistoryCommand) return;
+            try {
+                this._showAllHistoryCommand.removeEventListener("command", this._onShowAllHistoryCommand, true);
+            } catch (e) { }
+            this._showAllHistoryCommand = null;
+        }
+
         _onShowAllHistoryCommand(event) {
+            // Same switch as Ctrl+H: off means the native Library window is wanted back.
+            let takeOver = true;
+            try { takeOver = Services.prefs.getBoolPref("zen.library.shortcut.history", true); } catch (e) { }
+            if (!takeOver) return;
             event.preventDefault();
             event.stopPropagation();
-            event.stopImmediatePropagation?.();
             this.openTab("history");
         }
 
@@ -2021,12 +2048,7 @@
             window.removeEventListener("keydown", this._onKeyDown, true);
             window.removeEventListener("unload", this._onUnload);
             window.removeEventListener("wheel", this._onWheel, true);
-            if (this._showAllHistoryCommand) {
-                try {
-                    this._showAllHistoryCommand.removeEventListener("command", this._onShowAllHistoryCommand, true);
-                } catch (e) { }
-                this._showAllHistoryCommand = null;
-            }
+            this._unwatchShowAllHistoryCommand();
             [
                 "MozSwipeGestureMayStart",
                 "MozSwipeGestureStart",

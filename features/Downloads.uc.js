@@ -17,16 +17,17 @@
             this._filterLabelEl = null;
             this._folderScanCache = { folder: "", at: 0, items: null };
             this._folderScanPromise = null;
-            this._downloadsScanPrefObserver = {
-                observe: () => this._handleDownloadsScanPrefChange()
-            };
+            // Released in destroy(); the observer object is this instance's, so a Sine rebuild can't leak it.
+            this._scanPrefObserver = { observe: () => this._onScanPrefChange() };
             try {
-                Services.prefs.addObserver("zen.library.downloads.scan-folder", this._downloadsScanPrefObserver);
+                Services.prefs.addObserver(ZenLibraryDownloads.SCAN_PREF, this._scanPrefObserver);
             } catch (e) { }
         }
 
         static INITIAL_RENDER_LIMIT = 50;
         static RENDER_BATCH_SIZE = 50;
+        static SCAN_PREF = "zen.library.downloads.scan-folder";
+        static CLICK_PREF = "zen.library.downloads.click-action";
         static SCAN_CHUNK_SIZE = 25;
         static SCAN_CACHE_TTL_MS = 30000;
         // Native zen-library DOWNLOAD_FILTERS, mapped onto this module's status strings.
@@ -185,22 +186,28 @@
         }
 
 
+        // The session-plus-history list for this window's privacy context. DownloadHistory
+        // caches per type, so the same list comes back for reads and removals.
+        async _historyList() {
+            const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
+            const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
+            const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
+            const isPrivate = PrivateBrowsingUtils.isWindowPrivate(window);
+            return DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
+        }
+
         async fetchDownloads() {
             try {
-                const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
                 const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
-                const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
-
-                const isPrivate = PrivateBrowsingUtils.isContentWindowPrivate(window);
-                const historyList = await DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
+                const historyList = await this._historyList();
                 const allDownloadsRaw = await historyList.getAll();
                 const liveDownloads = await this.fetchLiveDownloads(Downloads);
 
-                const downloads = allDownloadsRaw.map(d => {
+                const toItem = async (d) => {
                     const liveDownload = this.findMatchingLiveDownload(d, liveDownloads);
                     const progressSource = liveDownload || d;
                     let filename = "Unknown Filename";
-                    const targetInfo = this.resolveDownloadTarget(d, liveDownload);
+                    const targetInfo = await this.resolveDownloadTarget(d, liveDownload);
                     const targetPath = targetInfo.path;
                     const fileExists = targetInfo.exists;
 
@@ -272,23 +279,143 @@
                         raw: liveDownload || d,
                         historyRaw: d
                     };
+                };
+
                 // [audit] PERF-1 — the search term used to be applied here, which made the
                 // full download list a function of it and meant every keystroke re-ran
                 // DownloadHistory.getAll() plus an nsIFile.exists() per download. Filtering
                 // moved to renderList, so the fetched list is now search-independent and can
                 // be served from _cachedDownloads. Matches how Media does it.
-                }).filter(d => d.timestamp);
-
-                if (this._shouldScanDownloadsFolder()) {
-                    return await this.mergeFolderScan(downloads, Downloads);
+                //
+                // The existence checks are IOUtils, off the main thread, in batches of 64 so a
+                // long history does not queue every stat at once (same shape as Media's scan).
+                const downloads = [];
+                for (let i = 0; i < allDownloadsRaw.length; i += 64) {
+                    const batch = await Promise.all(allDownloadsRaw.slice(i, i + 64).map(toItem));
+                    downloads.push(...batch.filter(d => d.timestamp));
                 }
 
+                if (this._shouldScanDownloadsFolder()) {
+                    return downloads.concat(await this.scanDownloadsFolder(Downloads, downloads));
+                }
                 return downloads;
 
             } catch (e) {
                 console.error("ZenLibrary: Error fetching downloads", e);
                 return [];
             }
+        }
+
+        // Optional Downloads-folder scan (zen.library.downloads.scan-folder, off by default): top-level
+        // files and folders that no history entry points at are shown as rows of their own. They carry no
+        // Download object, so open/show go through nsIFile and the history-only menu items are hidden.
+        _shouldScanDownloadsFolder() {
+            try {
+                return Services.prefs.getBoolPref(ZenLibraryDownloads.SCAN_PREF, false);
+            } catch (e) {
+                return false;
+            }
+        }
+
+        _clearFolderScanCache() {
+            this._folderScanCache = { folder: "", at: 0, items: null };
+        }
+
+        _onScanPrefChange() {
+            this._clearFolderScanCache();
+            this._cachedDownloads = null;
+            if (!this._canRender(this._renderToken, this._container)) return;
+            this._visibleLimit = ZenLibraryDownloads.INITIAL_RENDER_LIMIT;
+            this.sync().catch(e => console.error("ZenLibrary Downloads scan pref refresh error:", e));
+        }
+
+        async scanDownloadsFolder(Downloads, knownDownloads = []) {
+            // Preferred = where Zen actually saves (honours browser.download.dir); system = the OS default.
+            let folder = "";
+            try { folder = await Downloads.getPreferredDownloadsDirectory(); } catch (e) { }
+            if (!folder) {
+                try { folder = await Downloads.getSystemDownloadsDirectory(); } catch (e) { }
+            }
+            if (!folder) return [];
+
+            let scanned;
+            const cache = this._folderScanCache;
+            if (cache.folder === folder && cache.items && Date.now() - cache.at < ZenLibraryDownloads.SCAN_CACHE_TTL_MS) {
+                scanned = cache.items;
+            } else {
+                // One walk at a time: render() and sync() can both land here before the first finishes.
+                if (!this._folderScanPromise) {
+                    this._folderScanPromise = this._scanDownloadsFolderFiles(folder).finally(() => {
+                        this._folderScanPromise = null;
+                    });
+                }
+                try {
+                    scanned = await this._folderScanPromise;
+                    this._folderScanCache = { folder, at: Date.now(), items: scanned };
+                } catch (e) {
+                    console.warn("[ZenLibrary Downloads] Folder scan failed:", e);
+                    return [];
+                }
+            }
+
+            const knownPaths = new Set(knownDownloads.map(d => this.normalizeDownloadPath(d.targetPath)).filter(Boolean));
+            return scanned.filter(item => {
+                const normalized = this.normalizeDownloadPath(item.targetPath);
+                if (!normalized || knownPaths.has(normalized)) return false;
+                knownPaths.add(normalized);
+                return true;
+            });
+        }
+
+        // IOUtils throughout, in small chunks with a yield between them: a Downloads folder can hold
+        // thousands of entries and this runs on every open and sync while the pref is on.
+        async _scanDownloadsFolderFiles(folder) {
+            const isWindows = Services.appinfo.OS === "WINNT";
+            const children = await IOUtils.getChildren(folder);
+            const scanned = [];
+            for (let i = 0; i < children.length; i += ZenLibraryDownloads.SCAN_CHUNK_SIZE) {
+                const chunk = children.slice(i, i + ZenLibraryDownloads.SCAN_CHUNK_SIZE);
+                const entries = await Promise.all(chunk.map(async path => {
+                    try {
+                        const leafName = PathUtils.filename(path);
+                        // Dotfiles, in-flight .part files and (on Windows) hidden/system entries such as desktop.ini.
+                        if (!leafName || leafName.startsWith(".") || leafName.endsWith(".part")) return null;
+                        if (isWindows) {
+                            const attrs = await IOUtils.getWindowsAttributes(path);
+                            if (attrs.hidden || attrs.system) return null;
+                        }
+                        const info = await IOUtils.stat(path);
+                        if (info.type !== "regular" && info.type !== "directory") return null;
+                        return this._scannedItem(path, leafName, info);
+                    } catch (e) {
+                        return null;
+                    }
+                }));
+                for (const entry of entries) if (entry) scanned.push(entry);
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+            return scanned;
+        }
+
+        _scannedItem(path, leafName, info) {
+            const isFolder = info.type === "directory";
+            const size = isFolder ? 0 : Number(info.size) || 0;
+            return {
+                id: `folder-scan|${this.normalizeDownloadPath(path)}`,
+                filename: leafName,
+                size,
+                progressBytes: size,
+                totalBytes: size,
+                percent: 100,
+                estimatedSeconds: null,
+                status: "completed",
+                url: "",
+                timestamp: info.lastModified || info.creationTime || Date.now(),
+                targetPath: path,
+                raw: null,
+                historyRaw: null,
+                isFolder
+            };
         }
 
         async fetchLiveDownloads(Downloads) {
@@ -303,221 +430,42 @@
             }
         }
 
-        _shouldScanDownloadsFolder() {
-            try {
-                return Services.prefs.getBoolPref("zen.library.downloads.scan-folder", false);
-            } catch (e) {
-                return false;
-            }
-        }
-
-        _clearFolderScanCache() {
-            this._folderScanCache = { folder: "", at: 0, items: null };
-            this._folderScanPromise = null;
-        }
-
-        _handleDownloadsScanPrefChange() {
-            this._clearFolderScanCache();
-            this._cachedDownloads = null;
-            if (!this._canRender(this._renderToken, this._container)) return;
-
-            const token = ++this._renderToken;
-            const container = this._container;
-            this._visibleLimit = ZenLibraryDownloads.INITIAL_RENDER_LIMIT;
-            this._disconnectMoreObserver();
-            container.innerHTML = "";
-            container.appendChild(this.el("div", { className: "empty-state" }, [
-                this.el("div", { className: "empty-icon downloads-icon" }),
-                this.el("h3", { textContent: "Loading downloads..." }),
-                this.el("p", { textContent: "Refreshing your Downloads view." })
-            ]));
-
-            this.fetchDownloads().then(downloads => {
-                if (!this._canRender(token, container)) return;
-                this._cachedDownloads = downloads;
-                this.renderList(downloads);
-            }).catch(e => console.error("ZenLibrary Downloads live config refresh error:", e));
-        }
-
-        async mergeFolderScan(downloads, Downloads) {
-            try {
-                const scanned = await this.scanDownloadsFolder(Downloads, downloads);
-                if (!scanned.length) return downloads;
-                return downloads.concat(scanned);
-            } catch (e) {
-                console.warn("[ZenLibrary Downloads] Folder scan failed:", e);
-                return downloads;
-            }
-        }
-
-        async scanDownloadsFolder(Downloads, knownDownloads = []) {
-            const folder = await this.getDownloadsFolderPath(Downloads);
-            if (!folder) return [];
-
-            const knownPaths = new Set(
-                knownDownloads
-                    .map(d => this.normalizeDownloadPath(d.targetPath))
-                    .filter(Boolean)
-            );
-
-            if (
-                this._folderScanCache.folder === folder &&
-                this._folderScanCache.items &&
-                Date.now() - this._folderScanCache.at < ZenLibraryDownloads.SCAN_CACHE_TTL_MS
-            ) {
-                return this._folderScanCache.items.filter(item => {
-                    const normalized = this.normalizeDownloadPath(item.targetPath);
-                    if (!normalized || knownPaths.has(normalized)) return false;
-                    knownPaths.add(normalized);
-                    return true;
-                });
-            }
-
-            if (this._folderScanPromise) {
-                const cached = await this._folderScanPromise;
-                return cached.filter(item => {
-                    const normalized = this.normalizeDownloadPath(item.targetPath);
-                    if (!normalized || knownPaths.has(normalized)) return false;
-                    knownPaths.add(normalized);
-                    return true;
-                });
-            }
-
-            this._folderScanPromise = this.scanDownloadsFolderFiles(folder);
-            let scanned = [];
-            try {
-                scanned = await this._folderScanPromise;
-                this._folderScanCache = { folder, at: Date.now(), items: scanned };
-            } finally {
-                this._folderScanPromise = null;
-            }
-
-            return scanned.filter(item => {
-                const normalized = this.normalizeDownloadPath(item.targetPath);
-                if (!normalized || knownPaths.has(normalized)) return false;
-                knownPaths.add(normalized);
-                return true;
-            });
-        }
-
-        async scanDownloadsFolderFiles(folder) {
-            const scanned = [];
-            let children = [];
-            try {
-                children = await IOUtils.getChildren(folder);
-            } catch (e) {
-                console.warn("[ZenLibrary Downloads] Could not read Downloads folder:", e);
-                return [];
-            }
-
-            for (let i = 0; i < children.length; i += ZenLibraryDownloads.SCAN_CHUNK_SIZE) {
-                const chunk = children.slice(i, i + ZenLibraryDownloads.SCAN_CHUNK_SIZE);
-                const entries = await Promise.all(chunk.map(async path => {
-                    try {
-                        const info = await IOUtils.stat(path);
-                        if (info.type && info.type !== "regular" && info.type !== "directory") return null;
-                        return this.createScannedDownloadItem(path, info);
-                    } catch (e) {
-                        return null;
-                    }
-                }));
-                for (const entry of entries) {
-                    if (entry) scanned.push(entry);
-                }
-                await new Promise(resolve => setTimeout(resolve, 0));
-            }
-
-            return scanned;
-        }
-
-        async getDownloadsFolderPath(Downloads) {
-            try {
-                if (Downloads && typeof Downloads.getSystemDownloadsDirectory === "function") {
-                    const path = await Downloads.getSystemDownloadsDirectory();
-                    if (path) return path;
-                }
-            } catch (e) { }
-
-            try {
-                return Services.dirsvc.get("DfltDwnld", Ci.nsIFile).path;
-            } catch (e) {
-                return "";
-            }
-        }
-
-        createScannedDownloadItem(path, info) {
-            const normalized = this.normalizeDownloadPath(path);
-            if (!normalized) return null;
-
-            try {
-                const filename = this.leafNameFromPath(path);
-                const timestamp = info.lastModified || info.creationTime || Date.now();
-                const size = Number(info.size) || 0;
-                const isFolder = info.type === "directory";
-                return {
-                    id: `folder-scan|${normalized}`,
-                    filename,
-                    size,
-                    progressBytes: isFolder ? 0 : size,
-                    totalBytes: isFolder ? 0 : size,
-                    percent: isFolder || size > 0 ? 100 : 0,
-                    estimatedSeconds: null,
-                    status: "completed",
-                    url: "",
-                    timestamp,
-                    targetPath: path,
-                    raw: null,
-                    historyRaw: null,
-                    scannedFromFolder: true,
-                    isFolder
-                };
-            } catch (e) {
-                return null;
-            }
-        }
-
         // A download the user renamed from this panel keeps its history entry pointing at
         // the old path, so resolving straight from `target.path` reports it deleted. The
         // live download wins if there is one, then any rename we recorded ourselves, then
-        // whatever history has. This resolver still avoids guessing a renamed path from a
-        // same-size file; the optional Downloads-folder scan below adds independent files
-        // as their own rows instead of silently retargeting a history row.
-        resolveDownloadTarget(historyDownload, liveDownload) {
+        // whatever history has. Deliberately no search for a same-size file in the folder:
+        // size+mtime is not a strong enough identity to point "Open" at a guess. The optional
+        // folder scan adds unmatched files as rows of their own rather than retargeting one.
+        async resolveDownloadTarget(historyDownload, liveDownload) {
             const candidates = [
                 liveDownload?.target?.path,
                 this._renamedTargets.get(this.normalizeDownloadPath(historyDownload?.target?.path)),
                 historyDownload?.target?.path
-            ];
+            ].filter(Boolean);
 
+            // The first candidate is what we report when none of them exist.
+            let first = null;
             for (const candidate of candidates) {
-                const resolved = this.inspectTargetPath(candidate);
+                const resolved = await this.inspectTargetPath(candidate);
+                first ??= resolved;
                 if (resolved.exists) return resolved;
             }
-
-            return this.inspectTargetPath(candidates.find(Boolean));
+            return first || { path: "", exists: false, leafName: "" };
         }
 
-        inspectTargetPath(path) {
+        // IOUtils.exists, not nsIFile.exists(): this runs once per history entry on every
+        // open and sync, and the synchronous form stalls the UI on a slow or unplugged drive.
+        async inspectTargetPath(path) {
             if (!path || typeof path !== "string") {
                 return { path: "", exists: false, leafName: "" };
             }
-
-            try {
-                const file = Components.classes["@mozilla.org/file/local;1"].createInstance(Components.interfaces.nsIFile);
-                file.initWithPath(path);
-                return {
-                    path: file.path,
-                    exists: file.exists(),
-                    leafName: file.leafName || ""
-                };
-            } catch (e) {
-                const pathParts = String(path).split(/[\\/]/);
-                return {
-                    path: String(path),
-                    exists: false,
-                    leafName: pathParts.pop() || ""
-                };
+            let exists = false;
+            try { exists = await IOUtils.exists(path); } catch (e) { }
+            let leafName = "";
+            try { leafName = PathUtils.filename(path); } catch (e) {
+                leafName = path.split(/[\\/]/).pop() || "";
             }
+            return { path, exists, leafName };
         }
 
         // Download and HistoryDownload objects carry no id, so rows are keyed on what identifies one: target, source and start.
@@ -550,11 +498,6 @@
 
         normalizeDownloadPath(path) {
             return typeof path === "string" ? path.replace(/\\/g, "/").toLowerCase() : "";
-        }
-
-        leafNameFromPath(path) {
-            const parts = String(path || "").split(/[\\/]/);
-            return parts.pop() || "Unknown Filename";
         }
 
         estimateRemainingSeconds(download, progressBytes, totalBytes) {
@@ -727,12 +670,13 @@
                             itemEl.setAttribute("icon", window.ZenLibraryUtil.fileIconUrl(item.targetPath));
                             itemEl.setAttribute("title", item.filename);
                             itemEl.setAttribute("subtitle", item.isFolder ? "Folder" : `${this.formatBytes(item.size)} • ${item.status}`);
+                            // Source host+path takes the subtitle's place on hover (ZenLibraryItem builds the swap).
+                            itemEl.setAttribute("hover-subtitle", this.formatDisplayUrl(item.url));
                             itemEl.setAttribute("time", timeStr);
 
                             itemEl.onclick = (e) => {
                                 if (e.target.closest('.download-row-actions')) return;
-                                if (item.status === "deleted") return;
-                                this.handleAction(item, "show");
+                                this.handleAction(item, this._rowClickAction(), itemEl);
                             };
                             itemEl.oncontextmenu = (e) => {
                                 e.preventDefault();
@@ -741,7 +685,8 @@
 
                             // Add drag-and-drop support for dragging to web pages
                             itemEl.setAttribute('draggable', item.isFolder ? 'false' : 'true');
-                            itemEl.addEventListener('dragstart', async (e) => {
+                            // Synchronous on purpose: dataTransfer must be filled before dragstart returns.
+                            itemEl.addEventListener('dragstart', (e) => {
                                 // Only allow drag if we have a file path and file exists
                                 if (!item.targetPath || item.status === 'deleted' || item.isFolder) {
                                     e.preventDefault();
@@ -754,6 +699,7 @@
 
                                     if (!file.exists()) {
                                         e.preventDefault();
+                                        this._markDeleted(item, itemEl);
                                         return;
                                     }
 
@@ -781,21 +727,7 @@
                                 }
                             });
 
-                            const subtitle = itemEl.querySelector(".item-url");
-                            if (subtitle) {
-                                subtitle.textContent = "";
-                                subtitle.appendChild(this.el("span", {
-                                    className: "download-row-status",
-                                    textContent: item.isFolder ? "Folder" : `${this.formatBytes(item.size)} • ${item.status}`
-                                }));
-                                subtitle.appendChild(this.el("span", {
-                                    className: "download-row-url",
-                                    textContent: this.formatDisplayUrl(item.url)
-                                }));
-                            }
-
-                            const actions = this.createRowActions(item, itemEl);
-                            itemEl.appendSecondaryAction(actions);
+                            itemEl.appendSecondaryAction(this.createRowActions(item, itemEl));
                             this._container.appendChild(itemEl);
                         } catch (itemError) {
                             console.error("ZenLibrary Error processing download item:", itemError, item);
@@ -851,10 +783,20 @@
             return `background-image: url("${window.ZenLibraryUtil.cssUrl(url)}");`;
         }
 
+        // zen.library.downloads.click-action: "open" launches the file (default), "show" reveals it.
+        _rowClickAction() {
+            try {
+                return Services.prefs.getStringPref(ZenLibraryDownloads.CLICK_PREF, "open") === "show" ? "show" : "open";
+            } catch (e) {
+                return "open";
+            }
+        }
+
+        // Hover actions: Retry for a failed row, and ⋯ which opens the row's context menu anchored to it.
         createRowActions(item, itemEl) {
             const actions = this.el("div", { className: "download-row-actions zen-library-row-actions" });
 
-            if (item.status === "failed" || item.status === "canceled" || item.status === "cancelled") {
+            if (item.status === "failed") {
                 actions.appendChild(this.el("button", {
                     className: "download-row-action download-row-retry",
                     title: "Retry",
@@ -992,7 +934,7 @@
             file.launch();
         }
 
-        handleAction(item, action) {
+        handleAction(item, action, itemEl = null) {
             try {
                 if (action === "open-link") {
                     // [audit] SEC-2 — was a system triggering principal on a URL that comes
@@ -1005,9 +947,7 @@
 
                 if (action === "copy-link") {
                     if (!item.url) return;
-                    const helper = Components.classes["@mozilla.org/widget/clipboardhelper;1"]
-                        .getService(Components.interfaces.nsIClipboardHelper);
-                    helper.copyString(item.url);
+                    Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper).copyString(item.url);
                     return;
                 }
 
@@ -1036,43 +976,45 @@
                 const file = Components.classes["@mozilla.org/file/local;1"].createInstance(Components.interfaces.nsIFile);
                 file.initWithPath(item.targetPath);
 
-                if (action === "copy-file") {
-                    if (!file.exists()) {
-                        Services.prompt.alert(window, "Zen Library", "That file is no longer there.");
-                        return;
-                    }
+                // A file that went missing since the last sync: the row becomes a deleted row, no dialog.
+                if (!file.exists()) {
+                    this._markDeleted(item, itemEl);
+                    return;
+                }
 
-                    const transferable = Components.classes["@mozilla.org/widget/transferable;1"]
-                        .createInstance(Components.interfaces.nsITransferable);
+                if (action === "open-external" || action === "open") {
+                    this._launch(item, file).catch(e =>
+                        console.error("ZenLibrary: could not open the download", e));
+                } else if (action === "copy-file") {
+                    // Same two flavours Media puts on the clipboard: the file itself, and its URL for text targets.
+                    const transferable = Cc["@mozilla.org/widget/transferable;1"].createInstance(Ci.nsITransferable);
                     transferable.init(null);
                     transferable.addDataFlavor("application/x-moz-file");
                     transferable.setTransferData("application/x-moz-file", file);
-
-                    const fileUrl = Services.io.newFileURI(file).spec;
-                    const urlData = Components.classes["@mozilla.org/supports-string;1"]
-                        .createInstance(Components.interfaces.nsISupportsString);
-                    urlData.data = `${fileUrl}\n${item.filename || file.leafName}`;
+                    const urlData = Cc["@mozilla.org/supports-string;1"].createInstance(Ci.nsISupportsString);
+                    urlData.data = `${Services.io.newFileURI(file).spec}\n${file.leafName}`;
                     transferable.addDataFlavor("text/x-moz-url");
                     transferable.setTransferData("text/x-moz-url", urlData);
-
-                    const clipboard = Components.classes["@mozilla.org/widget/clipboard;1"]
-                        .getService(Components.interfaces.nsIClipboard);
-                    clipboard.setData(transferable, null, Components.interfaces.nsIClipboard.kGlobalClipboard);
-                } else if (action === "open-external" || action === "open") {
-                    if (!file.exists()) {
-                        // Services.prompt, not alert(): alert() in a chrome window blocks the
-                        // whole window rather than just this dialog.
-                        Services.prompt.alert(window, "Zen Library", "That file is no longer there.");
-                        return;
-                    }
-                    this._launch(item, file).catch(e =>
-                        console.error("ZenLibrary: could not open the download", e));
+                    Cc["@mozilla.org/widget/clipboard;1"].getService(Ci.nsIClipboard)
+                        .setData(transferable, null, Ci.nsIClipboard.kGlobalClipboard);
                 } else if (action === "show") {
-                    if (file.exists()) file.reveal();
-                    else Services.prompt.alert(window, "Zen Library", "That file is no longer there.");
+                    file.reveal();
                 }
             } catch (e) {
                 console.error("ZenLibrary: Download action failed", e);
+            }
+        }
+
+        // Same object renderList put in the row and in _cachedDownloads, so one status write covers both;
+        // re-assigning `data` is what adds the .deleted class (ZenLibraryItem.updateValues).
+        _markDeleted(item, itemEl) {
+            if (item.status === "deleted") return;
+            item.status = "deleted";
+            const cached = this._cachedDownloads?.find(d => d.id === item.id);
+            if (cached && cached !== item) cached.status = "deleted";
+            if (itemEl?.isConnected && itemEl.localName === "zen-library-item") {
+                itemEl.setAttribute("subtitle", `${this.formatBytes(item.size)} • deleted`);
+                itemEl.data = item;
             }
         }
 
@@ -1119,17 +1061,16 @@
             this._cachedDownloads = null;
             this._clearFolderScanCache();
             this._renderToken++;
-            try {
-                Services.prefs.removeObserver("zen.library.downloads.scan-folder", this._downloadsScanPrefObserver);
-            } catch (e) { }
+            try { Services.prefs.removeObserver(ZenLibraryDownloads.SCAN_PREF, this._scanPrefObserver); } catch (e) { }
             this._disconnectMoreObserver();
+            this._progressRows = null;
+            this._container = null;
+            // Lives in mainPopupSet, outside anything the panel tears down itself.
             const popup = document.getElementById("zen-downloads-context-menu");
             if (popup) {
                 try { popup.hidePopup(); } catch (e) { }
                 popup.remove();
             }
-            this._progressRows = null;
-            this._container = null;
         }
 
         _ensureContextMenu() {
@@ -1167,13 +1108,14 @@
             renameItem.id = "zen-downloads-ctx-rename";
             renameItem.setAttribute("label", "Rename file");
 
+            // "Hide" removes the history entry; "Delete file" is a permanent IOUtils.remove, so it says so.
             const deleteItem = document.createXULElement("menuitem");
             deleteItem.id = "zen-downloads-ctx-delete";
             deleteItem.setAttribute("label", "Hide");
 
             const deleteFileItem = document.createXULElement("menuitem");
             deleteFileItem.id = "zen-downloads-ctx-delete-file";
-            deleteFileItem.setAttribute("label", "Trash");
+            deleteFileItem.setAttribute("label", "Delete file");
 
             popup.appendChild(openFileItem);
             popup.appendChild(showItem);
@@ -1189,6 +1131,7 @@
             (document.getElementById("mainPopupSet") || document.body).appendChild(popup);
         }
 
+        // `anchor` is the ⋯ button when opened from it; a right-click opens at the pointer.
         _showContextMenu(e, item, itemEl, anchor = null) {
             this._ensureContextMenu();
             const popup = document.getElementById("zen-downloads-context-menu");
@@ -1198,33 +1141,35 @@
                 if (el) el.replaceWith(el.cloneNode(true));
             }
 
+            const hasFile = !!item.targetPath && item.status !== "deleted";
+
             const openFileItem = document.getElementById("zen-downloads-ctx-open-file");
-            openFileItem.hidden = !item.targetPath || item.status === "deleted";
+            openFileItem.hidden = !hasFile;
             openFileItem.setAttribute("label", item.isFolder ? "Open folder" : "Open");
             openFileItem.addEventListener("command", () => {
-                this.handleAction(item, "open");
+                this.handleAction(item, "open", itemEl);
             });
 
             const showItem = document.getElementById("zen-downloads-ctx-show");
-            showItem.hidden = !item.targetPath || item.status === "deleted";
+            showItem.hidden = !hasFile;
             showItem.addEventListener("command", () => {
-                this.handleAction(item, "show");
+                this.handleAction(item, "show", itemEl);
             });
 
             const copyFileItem = document.getElementById("zen-downloads-ctx-copy-file");
-            copyFileItem.hidden = !item.targetPath || item.status === "deleted" || item.isFolder;
+            copyFileItem.hidden = !hasFile || item.isFolder;
             copyFileItem.addEventListener("command", () => {
-                this.handleAction(item, "copy-file");
+                this.handleAction(item, "copy-file", itemEl);
             });
 
             const openLinkItem = document.getElementById("zen-downloads-ctx-open-link");
-            openLinkItem.hidden = !item.url || item.scannedFromFolder;
+            openLinkItem.hidden = !item.url;
             openLinkItem.addEventListener("command", () => {
                 this.handleAction(item, "open-link");
             });
 
             const copyLinkItem = document.getElementById("zen-downloads-ctx-copy-link");
-            copyLinkItem.hidden = !item.url || item.scannedFromFolder;
+            copyLinkItem.hidden = !item.url;
             copyLinkItem.addEventListener("command", () => {
                 this.handleAction(item, "copy-link");
             });
@@ -1238,7 +1183,7 @@
             });
 
             const renameItem = document.getElementById("zen-downloads-ctx-rename");
-            renameItem.hidden = !!item.isFolder;
+            renameItem.hidden = !hasFile || item.isFolder;
             renameItem.addEventListener("command", () => {
                 if (!item.targetPath || item.status === "deleted") return;
                 const input = { value: item.filename };
@@ -1247,7 +1192,10 @@
                 try {
                     const file = Components.classes["@mozilla.org/file/local;1"].createInstance(Components.interfaces.nsIFile);
                     file.initWithPath(item.targetPath);
-                    if (!file.exists()) return;
+                    if (!file.exists()) {
+                        this._markDeleted(item, itemEl);
+                        return;
+                    }
                     const newName = input.value.trim();
                     const oldPath = file.path;
                     // moveTo() repoints the nsIFile at its new location, so this is the
@@ -1255,6 +1203,8 @@
                     file.moveTo(file.parent, newName);
                     const newPath = file.path;
                     this._renamedTargets.set(this.normalizeDownloadPath(oldPath), newPath);
+                    // The scan snapshot still lists the old name; drop it so the next sync doesn't resurrect it.
+                    this._clearFolderScanCache();
                     item.filename = newName;
                     item.targetPath = newPath;
                     itemEl.setAttribute("title", newName);
@@ -1272,7 +1222,7 @@
             });
 
             const deleteFileItem = document.getElementById("zen-downloads-ctx-delete-file");
-            deleteFileItem.hidden = !item.targetPath || item.status === "deleted" || item.isFolder;
+            deleteFileItem.hidden = !hasFile || item.isFolder;
             deleteFileItem.addEventListener("command", async () => {
                 const confirmed = Services.prompt.confirm(
                     window,
@@ -1285,21 +1235,20 @@
                     // IOUtils, not nsIFile: exists()/remove() are synchronous main-thread I/O
                     // and hang the whole browser on a slow or disconnected network drive.
                     if (!(await IOUtils.exists(item.targetPath))) {
-                        Services.prompt.alert(window, "Zen Library", "That file is no longer there.");
+                        this._markDeleted(item, itemEl);
                         return;
                     }
 
                     await IOUtils.remove(item.targetPath);
+                    this._clearFolderScanCache();
 
-                    try {
-                        const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
-                        const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
-                        const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
-                        const isPrivate = PrivateBrowsingUtils.isContentWindowPrivate(window);
-                        const list = await DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
-                        await list.remove(item.historyRaw || item.raw);
-                    } catch (historyErr) {
-                        console.warn("[ZenLibrary Downloads] Deleted file but could not remove history entry:", historyErr);
+                    if (item.historyRaw || item.raw) {
+                        try {
+                            const list = await this._historyList();
+                            await list.remove(item.historyRaw || item.raw);
+                        } catch (historyErr) {
+                            console.warn("[ZenLibrary Downloads] Deleted file but could not remove history entry:", historyErr);
+                        }
                     }
 
                     this.removeDownloadRow(item, itemEl);
@@ -1309,15 +1258,11 @@
                 }
             });
 
-            const deleteHistoryItem = document.getElementById("zen-downloads-ctx-delete");
-            deleteHistoryItem.hidden = item.scannedFromFolder || (!item.historyRaw && !item.raw);
-            deleteHistoryItem.addEventListener("command", async () => {
+            const hideItem = document.getElementById("zen-downloads-ctx-delete");
+            hideItem.hidden = !item.historyRaw && !item.raw;
+            hideItem.addEventListener("command", async () => {
                 try {
-                    const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
-                    const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
-                    const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
-                    const isPrivate = PrivateBrowsingUtils.isContentWindowPrivate(window);
-                    const list = await DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
+                    const list = await this._historyList();
                     await list.remove(item.historyRaw || item.raw);
                     this.removeDownloadRow(item, itemEl);
                 } catch (err) {
@@ -1325,37 +1270,49 @@
                 }
             });
 
-            itemEl?.toggleAttribute?.("menu-open", true);
-            popup.addEventListener("popuphidden", () => {
-                itemEl?.removeAttribute?.("menu-open");
-            }, { once: true });
+            this._trimSeparators(popup);
 
-            if (anchor) {
-                popup.openPopup(anchor, "after_end", 0, 4, false, false, e);
-            } else {
-                popup.openPopupAtScreen(e.screenX, e.screenY, true);
+            // Keeps the hover actions / URL visible while the menu is up (core.css, downloads.css).
+            itemEl?.setAttribute("menu-open", "true");
+            popup.addEventListener("popuphidden", () => itemEl?.removeAttribute("menu-open"), { once: true });
+
+            if (anchor) popup.openPopup(anchor, "after_end", 0, 4, false, false, e);
+            else popup.openPopupAtScreen(e.screenX, e.screenY, true);
+        }
+
+        // The separators are static but the items around them hide per row, so a separator is shown only
+        // when a visible item precedes it and another follows; consecutive ones collapse to the last.
+        _trimSeparators(popup) {
+            let pending = null;
+            let seenItem = false;
+            for (const child of popup.children) {
+                if (child.localName === "menuseparator") {
+                    child.hidden = true;
+                    if (seenItem) pending = child;
+                } else if (!child.hidden) {
+                    if (pending) {
+                        pending.hidden = false;
+                        pending = null;
+                    }
+                    seenItem = true;
+                }
             }
         }
 
+        // Host + path for the hover subtitle. Capped: a data: or blob: source has no host and can be megabytes long.
         formatDisplayUrl(url) {
             if (!url) return "";
+            let display = String(url);
             try {
                 const parsed = new URL(url);
-                const host = parsed.hostname.replace(/^www\./, "");
                 const path = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname : "";
-                return `${host}${path}`;
-            } catch (e) {
-                return String(url);
-            }
+                if (parsed.hostname) display = `${parsed.hostname.replace(/^www\./, "")}${path}`;
+            } catch (e) { }
+            return display.length > 200 ? `${display.slice(0, 200)}…` : display;
         }
 
-        formatBytes(bytes, decimals = 2) {
-            if (!+bytes || bytes === 0) return "0 Bytes";
-            const k = 1024;
-            const dm = decimals < 0 ? 0 : decimals;
-            const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+        formatBytes(bytes) {
+            return window.ZenLibraryUtil.formatBytes(bytes);
         }
 
         formatDuration(seconds) {
@@ -1369,49 +1326,49 @@
             return `${hours}h ${remainingMinutes}m left`;
         }
 
+        // For the DownloadURL drag flavour only; the platform MIME service is not consulted.
+        static MIME_TYPES = {
+            // Images
+            'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+            'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp',
+            'svg': 'image/svg+xml', 'ico': 'image/x-icon',
+
+            // Documents
+            'pdf': 'application/pdf', 'doc': 'application/msword',
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'xls': 'application/vnd.ms-excel',
+            'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'ppt': 'application/vnd.ms-powerpoint',
+            'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+
+            // Text
+            'txt': 'text/plain', 'html': 'text/html', 'css': 'text/css',
+            'js': 'text/javascript', 'json': 'application/json',
+            'xml': 'text/xml', 'csv': 'text/csv',
+
+            // Audio
+            'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg',
+            'flac': 'audio/flac', 'aac': 'audio/aac', 'm4a': 'audio/mp4',
+
+            // Video
+            'mp4': 'video/mp4', 'avi': 'video/x-msvideo', 'mov': 'video/quicktime',
+            'wmv': 'video/x-ms-wmv', 'flv': 'video/x-flv', 'webm': 'video/webm',
+            'mkv': 'video/x-matroska',
+
+            // Archives
+            'zip': 'application/zip', 'rar': 'application/x-rar-compressed',
+            '7z': 'application/x-7z-compressed', 'tar': 'application/x-tar',
+            'gz': 'application/gzip',
+
+            // Executables
+            'exe': 'application/x-msdownload', 'msi': 'application/x-msi',
+            'deb': 'application/x-debian-package', 'rpm': 'application/x-rpm'
+        };
+
         getContentTypeFromFilename(filename) {
             if (!filename) return 'application/octet-stream';
-
             const ext = filename.toLowerCase().split('.').pop();
-            const mimeTypes = {
-                // Images
-                'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
-                'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp',
-                'svg': 'image/svg+xml', 'ico': 'image/x-icon',
-
-                // Documents
-                'pdf': 'application/pdf', 'doc': 'application/msword',
-                'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                'xls': 'application/vnd.ms-excel',
-                'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                'ppt': 'application/vnd.ms-powerpoint',
-                'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-
-                // Text
-                'txt': 'text/plain', 'html': 'text/html', 'css': 'text/css',
-                'js': 'text/javascript', 'json': 'application/json',
-                'xml': 'text/xml', 'csv': 'text/csv',
-
-                // Audio
-                'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg',
-                'flac': 'audio/flac', 'aac': 'audio/aac', 'm4a': 'audio/mp4',
-
-                // Video
-                'mp4': 'video/mp4', 'avi': 'video/x-msvideo', 'mov': 'video/quicktime',
-                'wmv': 'video/x-ms-wmv', 'flv': 'video/x-flv', 'webm': 'video/webm',
-                'mkv': 'video/x-matroska',
-
-                // Archives
-                'zip': 'application/zip', 'rar': 'application/x-rar-compressed',
-                '7z': 'application/x-7z-compressed', 'tar': 'application/x-tar',
-                'gz': 'application/gzip',
-
-                // Executables
-                'exe': 'application/x-msdownload', 'msi': 'application/x-msi',
-                'deb': 'application/x-debian-package', 'rpm': 'application/x-rpm'
-            };
-
-            return mimeTypes[ext] || 'application/octet-stream';
+            return ZenLibraryDownloads.MIME_TYPES[ext] || 'application/octet-stream';
         }
     }
 

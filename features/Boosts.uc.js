@@ -309,15 +309,12 @@
                     const isEnabled = mgr ? (mgr.getActiveBoostId(domain) === boostId) : (boostId === activeId);
 
                     const row = this.el("div", {
-                        className: `library-list-item zen-library-row library-boost-item zen-library-boost-row${isEnabled ? "" : " boosts-disabled"}`
+                        className: `library-list-item zen-library-row library-boost-item${isEnabled ? "" : " boosts-disabled"}`
                     });
                     row.toggleAttribute("disabled", !isEnabled);
 
-                    // Favicon
+                    // Favicon. `domain` is stored data; an attribute is inert, unlike the cssText it used to reach.
                     const iconContainer = this.el("span", { className: "zen-library-boost-icon" });
-                    // [audit] SEC-3 — `domain` is stored data, and this string is assigned to
-                    // cssText, so an unescaped quote in it injected CSS declarations into
-                    // privileged chrome rather than merely breaking a favicon.
                     iconContainer.appendChild(this.el("img", {
                         className: "zen-library-row-icon",
                         src: `page-icon:https://${domain}`,
@@ -349,21 +346,10 @@
                     });
                     row.appendChild(toggle);
 
+                    // The whole row is the switch; the editor is reached from the context menu.
                     row.onclick = (e) => {
                         if (e.target.closest(".boosts-toggle")) return;
-                        if (!mgr) return;
-                        const currentlyEnabled = mgr.getActiveBoostId(domain) === boostId;
-                        if (currentlyEnabled) {
-                            this.openBoostWithEditor(domain, boost);
-                            return;
-                        }
-                        mgr.toggleBoostActiveForDomain(domain, boostId);
-                        row.classList.remove("boosts-disabled");
-                        row.removeAttribute("disabled");
-                        iconContainer.firstElementChild.removeAttribute("inactive");
-                        toggle.setAttribute("checked", "true");
-                        const thumb = toggle.querySelector(".boosts-toggle-thumb");
-                        if (thumb) thumb.style.transform = "translateX(14px)";
+                        toggle.click();
                     };
 
                     row.oncontextmenu = (e) => {

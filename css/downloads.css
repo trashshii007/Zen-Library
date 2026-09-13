@@ -69,20 +69,6 @@ zen-library-item[menu-open] .download-row-actions {
     mask-image: url("chrome://browser/skin/reload.svg");
 }
 
-.download-row-url {
-    display: none;
-}
-
-zen-library-item:hover .download-row-status,
-zen-library-item[menu-open] .download-row-status {
-    display: none;
-}
-
-zen-library-item:hover .download-row-url,
-zen-library-item[menu-open] .download-row-url {
-    display: inline;
-}
-
 .library-download-progress-item {
     display: flex;
     align-items: center;

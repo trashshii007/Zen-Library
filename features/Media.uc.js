@@ -81,7 +81,6 @@
 
                 const clipboard = Cc["@mozilla.org/widget/clipboard;1"].getService(Ci.nsIClipboard);
                 clipboard.setData(transferable, null, Ci.nsIClipboard.kGlobalClipboard);
-
             } catch (err) {
                 console.error("[MEDIA] Failed to copy file:", err);
             }
