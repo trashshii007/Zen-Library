@@ -8,6 +8,20 @@
 
     const _ucScriptPath = Components.stack.filename;
 
+    // The one list of sections. Adding one means a new entry here, its sidebar icon below,
+    // an `update()` dispatch branch, an `applyTargetWidth` case if it sizes itself, and a
+    // theme.json script entry.
+    const SECTIONS = {
+        downloads: { global: "ZenLibraryDownloads", script: "features/Downloads.uc.js" },
+        history:   { global: "ZenLibraryHistory",   script: "features/History.uc.js" },
+        media:     { global: "ZenLibraryMedia",     script: "features/Media.uc.js" },
+        spaces:    { global: "ZenLibrarySpaces",    script: "features/Spaces.uc.js" },
+        boosts:    { global: "ZenLibraryBoosts",    script: "features/Boosts.uc.js" },
+        easels:    { global: "ZenLibraryEasels",    script: "features/Easels.uc.js" }
+    };
+    const SECTION_IDS = Object.keys(SECTIONS);
+    const DEFAULT_TAB = "downloads";
+
     // Load feature modules that may not have been loaded yet
     const _loadFeatureIfMissing = (windowProp, relPath) => {
         if (window[windowProp]) return;
@@ -22,13 +36,7 @@
     // [audit] MAINT-1 — the shared helpers must exist before anything else runs. theme.json
     // loads them first, but this covers a partial rebuild where only this file was reloaded.
     _loadFeatureIfMissing("ZenLibraryUtil", "lib/util.uc.js");
-
-    _loadFeatureIfMissing("ZenLibraryDownloads", "features/Downloads.uc.js");
-    _loadFeatureIfMissing("ZenLibraryHistory",   "features/History.uc.js");
-    _loadFeatureIfMissing("ZenLibraryMedia",     "features/Media.uc.js");
-    _loadFeatureIfMissing("ZenLibrarySpaces",    "features/Spaces.uc.js");
-    _loadFeatureIfMissing("ZenLibraryBoosts",    "features/Boosts.uc.js");
-    _loadFeatureIfMissing("ZenLibraryEasels",    "features/Easels.uc.js");
+    for (const { global, script } of Object.values(SECTIONS)) _loadFeatureIfMissing(global, script);
 
     /**
      * Reusable Component for Library Items
@@ -204,7 +212,7 @@
         constructor() {
             super();
             this.attachShadow({ mode: 'open' });
-            this._activeTab = (window.gZenLibrary && window.gZenLibrary.lastActiveTab) || "downloads";
+            this._activeTab = (window.gZenLibrary && window.gZenLibrary.lastActiveTab) || DEFAULT_TAB;
             this._initialized = false;
 
             // Use shared store if available, otherwise create local (fallback)
@@ -213,27 +221,26 @@
             });
 
             this._sidebarItemEls = {};
+            for (const id of SECTION_IDS) this._adoptModule(id);
+        }
 
-            // Use pre-initialized modules from controller if available
-            // This allows us to use cached data for instant rendering
-            const preInit = window.gZenLibrary && window.gZenLibrary.getModules ? window.gZenLibrary.getModules() : {};
-
-            // Initialize Feature Modules - reuse pre-initialized ones or create new
-            // Pass 'this' to update the library reference
-            this.downloads = preInit.downloads || (window.ZenLibraryDownloads ? new window.ZenLibraryDownloads(this) : null);
-            this.history = preInit.history || (window.ZenLibraryHistory ? new window.ZenLibraryHistory(this) : null);
-            this.media = preInit.media || (window.ZenLibraryMedia ? new window.ZenLibraryMedia(this) : null);
-            this.spaces = preInit.spaces || (window.ZenLibrarySpaces ? new window.ZenLibrarySpaces(this) : null);
-            this.boosts = preInit.boosts || (window.ZenLibraryBoosts ? new window.ZenLibraryBoosts(this) : null);
-            this.easels = preInit.easels || (window.ZenLibraryEasels ? new window.ZenLibraryEasels(this) : null);
-
-            // Update the library reference on pre-initialized modules so they can use our el() helper
-            if (this.downloads) this.downloads.library = this;
-            if (this.history) this.history.library = this;
-            if (this.media) this.media.library = this;
-            if (this.spaces) this.spaces.library = this;
-            if (this.boosts) this.boosts.library = this;
-            if (this.easels) this.easels.library = this;
+        // One instance per section per window. The controller's persistent copy (created 2 s
+        // after load, so it can prefetch) is preferred; when the panel opens before that, the
+        // instance built here is handed back to the controller so destroy() still finds it —
+        // History's Places listener, Boosts' observers and Media's blob URLs all live on it.
+        _adoptModule(id) {
+            const controller = window.gZenLibrary;
+            const modules = controller?.getModules?.();
+            let module = modules?.[id] || this[id] || null;
+            if (!module) {
+                const Ctor = window[SECTIONS[id].global];
+                if (!Ctor) return null;
+                module = new Ctor(this);
+                if (modules && !modules[id]) modules[id] = module;
+            }
+            module.library = this;
+            this[id] = module;
+            return module;
         }
 
         get activeTab() { return this._activeTab; }
@@ -302,6 +309,7 @@
 
                     const sidebarItemsContainer = document.createElement("div");
                     sidebarItemsContainer.className = "sidebar-items";
+                    // Display order, not SECTION_IDS order.
                     const sidebarItems = ["media", "downloads", "easels", "spaces", "boosts", "history"];
                     const parser = new DOMParser();
 
@@ -684,9 +692,21 @@
             try { window.gZenLibrary?._restoreWindowButtons(); } catch (e) { }
         }
 
+        // Fallback `true` matches preferences.json: Sine only writes a defaultValue when the settings page is opened.
         _atgCompatEnabled() {
-            try { return Services.prefs.getBoolPref("zen.library.compat.advanced-tab-groups", false); } catch (e) { return false; }
+            try { return Services.prefs.getBoolPref("zen.library.compat.advanced-tab-groups", true); } catch (e) { return true; }
         }
+
+        // What a section leaves in .library-content when it is mounted; update() skips the
+        // render while it is still there. Spaces has none: its render() always rebuilds.
+        static SECTION_CONTAINERS = {
+            downloads: ".library-list-container",
+            history: ".library-list-container",
+            media: ".media-grid",
+            boosts: ".library-list-container",
+            easels: ".easel-card-grid",
+            spaces: null
+        };
 
         // Native zen-library: 84px sidebar + 27rem content (media/spaces size themselves). Never wider than 95vw.
         // Pure DOM-free math so the controller can apply it before the host is inserted and styled for the first time.
@@ -708,6 +728,19 @@
             return targetWidth;
         }
 
+        // Width, offset and content shift only — no header or section work. update() runs
+        // this first; Media calls it on its own when its filtered count changes mid-render,
+        // which used to go through a full nested update() and could remount the section.
+        syncWidth() {
+            // Width first: _measureToolboxWidth flushes style, and the host must never be styled at the 516px default or it transitions from there.
+            const targetWidth = this.applyTargetWidth();
+            // PR shift: panel width minus the live toolbox width; measured by the controller so the tween agrees.
+            const toolboxWidth = window.gZenLibrary?._measureToolboxWidth?.() ?? 0;
+            document.documentElement.style.setProperty("--zen-library-offset", `${Math.max(0, targetWidth - toolboxWidth)}px`);
+            // The content shift follows the live (transitioning) width via the controller's ResizeObserver.
+            window.gZenLibrary?._syncShift?.();
+        }
+
         // `force` re-renders the current section in place (Easels after an index change, rename, delete or search).
         update(force = false) {
             // ATG compat: its tab-strip hooks call update(true) on every tab move/close/drop. Only Spaces reads
@@ -721,7 +754,6 @@
                 }
                 force = false;
             }
-            this._updateDepth = (this._updateDepth || 0) + 1;
             try {
                 // Check if custom elements are properly registered
                 if (!customElements.get('zen-library-item')) {
@@ -729,16 +761,7 @@
                     return;
                 }
 
-                // Width first: _measureToolboxWidth flushes style, and the host must never be styled at the 516px default or it transitions from there.
-                const targetWidth = this.applyTargetWidth();
-
-                // PR shift: panel width minus the live toolbox width; measured by the controller so the tween agrees.
-                const toolboxWidth = window.gZenLibrary?._measureToolboxWidth?.() ?? 0;
-                const offset = Math.max(0, targetWidth - toolboxWidth);
-
-                document.documentElement.style.setProperty("--zen-library-offset", `${offset}px`);
-                // The content shift follows the live (transitioning) width via the controller's ResizeObserver.
-                window.gZenLibrary?._syncShift?.();
+                this.syncWidth();
 
                 for (const id in this._sidebarItemEls) {
                     this._sidebarItemEls[id].classList.toggle("active", id === this.activeTab);
@@ -755,11 +778,7 @@
                 // Entrance fade is for opening a section, not for in-place updates
                 // (delete, rename, search, index refresh). Those remount the same
                 // grid and would otherwise replay library-content-fade-in.
-                // Nested update() calls (Media width recalc mid-render) must not
-                // clear a fade that the outer pass already decided to play.
-                const entering = tabChanged || !contentBelongsToTab;
-                if (this._updateDepth === 1) this._contentEntering = entering;
-                else if (entering) this._contentEntering = true;
+                this._contentEntering = tabChanged || !contentBelongsToTab;
                 this._lastRenderedTab = this.activeTab;
 
                 // Header / Search Bar Logic
@@ -768,55 +787,53 @@
                         // Read before the header is cleared; a forced rebuild must not wipe the field or drop focus (Easels re-renders through update(true)).
                         const hadFocus = this.shadowRoot.activeElement?.closest?.(".library-header") != null;
                         header.innerHTML = "";
-                        const val = this[this.activeTab]?._searchTerm || "";
-
-                        // [audit] PERF-1 — the results pass is debounced. It used to run on
-                        // every keystroke, and for Downloads and Media that meant a full
-                        // recursive filesystem walk per character typed. The search *term*
-                        // is still recorded synchronously so the field never feels laggy;
-                        // only the re-render is deferred.
-                        //
-                        // Stored on the element so a rebuilt header cancels the old timer
-                        // rather than leaving it to fire against a detached container.
+                        // A rebuilt header must cancel the old timer rather than leave it to fire against a detached container.
                         if (this._searchDebounce) this._searchDebounce.cancel();
-                        this._searchDebounce = window.ZenLibraryUtil.debounce(() => {
-                            const tab = this.activeTab;
-                            if (tab === "history" && this.history) {
-                                this.history.renderBatch(true);
-                            } else if (tab === "downloads" && this.downloads) {
-                                // Both of these now filter a cached list rather than going
-                                // back to the download history or the filesystem: the fetch
-                                // no longer depends on the search term.
-                                if (this.downloads._cachedDownloads) {
-                                    this.downloads.renderList(this.downloads._cachedDownloads);
-                                } else {
-                                    this.downloads.fetchDownloads().then(d => this.downloads.renderList(d));
-                                }
-                            } else if (tab === "media" && this.media) {
-                                // Search is a pure filter over the scanned list, so use
-                                // whatever the last scan produced regardless of its age
-                                // rather than re-walking Downloads mid-typing.
-                                if (this.media._scanCache) {
-                                    this.media.renderList(this.media._scanCache);
-                                } else {
-                                    this.media.fetchDownloads().then(d => this.media.renderList(d));
-                                }
-                            } else if (tab === "boosts" && this.boosts) {
-                                this.boosts.renderList();
-                            } else if (tab === "easels" && this.easels) {
-                                // Easels renders from a warm in-memory list, so it goes back
-                                // through update() rather than having a render call of its own.
-                                this.update(true);
-                            }
-                        }, 300);
+                        this._searchDebounce = null;
 
                         const module = this[this.activeTab];
                         if (module && typeof module.renderHeaderControls === "function") {
+                            // History: owns its search field, filter panel and debounce.
                             header.appendChild(module.renderHeaderControls());
                         } else {
+                            // [audit] PERF-1 — the results pass is debounced. It used to run on
+                            // every keystroke, and for Downloads and Media that meant a full
+                            // recursive filesystem walk per character typed. The search *term*
+                            // is still recorded synchronously so the field never feels laggy;
+                            // only the re-render is deferred.
+                            this._searchDebounce = window.ZenLibraryUtil.debounce(() => {
+                                const tab = this.activeTab;
+                                if (tab === "downloads" && this.downloads) {
+                                    // Both of these now filter a cached list rather than going
+                                    // back to the download history or the filesystem: the fetch
+                                    // no longer depends on the search term.
+                                    if (this.downloads._cachedDownloads) {
+                                        this.downloads.renderList(this.downloads._cachedDownloads);
+                                    } else {
+                                        this.downloads.fetchDownloads().then(d => this.downloads.renderList(d));
+                                    }
+                                } else if (tab === "media" && this.media) {
+                                    // Search is a pure filter over the scanned list, so use
+                                    // whatever the last scan produced regardless of its age
+                                    // rather than re-walking Downloads mid-typing.
+                                    if (this.media._scanCache) {
+                                        this.media.renderList(this.media._scanCache);
+                                    } else {
+                                        this.media.fetchDownloads().then(d => this.media.renderList(d));
+                                    }
+                                } else if (tab === "boosts" && this.boosts) {
+                                    this.boosts.renderList();
+                                } else if (tab === "easels" && this.easels) {
+                                    // Easels renders from a warm in-memory list, so it goes back
+                                    // through update() rather than having a render call of its own.
+                                    this.update(true);
+                                }
+                            }, 300);
+
                             // PR-style search header shared by every section without its
                             // own renderHeaderControls: pill box with glass icon, same
                             // component History uses, so all search bars sit identically.
+                            const val = module?._searchTerm || "";
                             const top = this.el("div", { className: "zen-library-search-top" });
                             const searchInput = this.el("input", {
                                 type: "search",
@@ -868,76 +885,33 @@
                     header.innerHTML = "";
                 }
 
-                // Content Rendering via Feature Modules
-                let elToAppend = null;
-                let needsAppend = false;
-
-                // Lazy load features if they weren't available during constructor
-                if (!this.downloads && window.ZenLibraryDownloads) this.downloads = new window.ZenLibraryDownloads(this);
-                if (!this.history && window.ZenLibraryHistory) this.history = new window.ZenLibraryHistory(this);
-                if (!this.media && window.ZenLibraryMedia) this.media = new window.ZenLibraryMedia(this);
-                if (!this.spaces && window.ZenLibrarySpaces) this.spaces = new window.ZenLibrarySpaces(this);
-                if (!this.boosts && window.ZenLibraryBoosts) this.boosts = new window.ZenLibraryBoosts(this);
-                if (!this.easels && window.ZenLibraryEasels) {
-                    this.easels = new window.ZenLibraryEasels(this);
-                    // Registered with the controller as well, or destroy() cannot find it to remove its context menu.
-                    if (window.gZenLibrary && window.gZenLibrary._modules) {
-                        window.gZenLibrary._modules.easels = this.easels;
+                // Content Rendering via Feature Modules. A module whose script arrived after
+                // the constructor (partial Sine rebuild) is adopted here on first use.
+                const module = this[this.activeTab] || this._adoptModule(this.activeTab);
+                if (!module) {
+                    if (tabChanged) {
+                        content.innerHTML = `<div class="empty-state${this._contentEntering ? " library-content-fade-in" : ""}">
+                             <div class="empty-icon ${this.activeTab}-icon"></div>
+                             <h3>Feature not available</h3>
+                             <p>The ${this.activeTab} module is not loaded.</p>
+                           </div>`;
+                        content.dataset.tab = this.activeTab;
                     }
+                    return;
                 }
 
-                if (this.activeTab === "spaces" && this.spaces) {
-                    // Spaces has its own intelligent re-render check usually
-                    // But for now we delegate completely
-                    elToAppend = this.spaces.render();
-                    // Optimization: Spaces.render checks if container exists
-                    needsAppend = true; // Always append correctly returned wrapper
-                }
-                else if (this.activeTab === "history" && this.history) {
-                    if (!contentBelongsToTab || !content.querySelector(".library-list-container") || tabChanged || force) {
-                        elToAppend = this.history.render();
-                        needsAppend = true;
-                    }
-                }
-                else if (this.activeTab === "downloads" && this.downloads) {
-                    if (!contentBelongsToTab || !content.querySelector(".library-list-container") || tabChanged || force) {
-                        elToAppend = this.downloads.render();
-                        needsAppend = true;
-                    }
-                }
-                else if (this.activeTab === "media" && this.media) {
-                    if (!contentBelongsToTab || !content.querySelector(".media-grid") || tabChanged || force) {
-                        elToAppend = this.media.render();
-                        needsAppend = true;
-                    }
-                }
-                else if (this.activeTab === "boosts" && this.boosts) {
-                    if (!contentBelongsToTab || !content.querySelector(".library-list-container") || tabChanged || force) {
-                        elToAppend = this.boosts.render();
-                        needsAppend = true;
-                    }
-                }
-                else if (this.activeTab === "easels" && this.easels) {
-                    if (!contentBelongsToTab || !content.querySelector(".easel-card-grid") || tabChanged || force) {
-                        elToAppend = this.easels.render();
-                        needsAppend = true;
-                    }
-                }
+                // Spaces always rebuilds (its render() restores scroll itself); the others only
+                // when the tab changed, the caller forced it, or their container is missing.
+                const container = ZenLibraryElement.SECTION_CONTAINERS[this.activeTab];
+                const mounted = contentBelongsToTab && (!container || content.querySelector(container));
+                if (container && mounted && !tabChanged && !force) return;
 
-                if (needsAppend && elToAppend) {
+                const node = module.render();
+                if (node) {
                     content.innerHTML = "";
-                    content.appendChild(elToAppend);
-                    content.dataset.tab = this.activeTab;
-                } else if (!this[this.activeTab] && !elToAppend && tabChanged) {
-                    // Fallback if module missing
-                    content.innerHTML = `<div class="empty-state${this._contentEntering ? " library-content-fade-in" : ""}">
-                         <div class="empty-icon ${this.activeTab}-icon"></div>
-                         <h3>Feature not available</h3>
-                         <p>The ${this.activeTab} module is not loaded.</p>
-                       </div>`;
+                    content.appendChild(node);
                     content.dataset.tab = this.activeTab;
                 }
-
             } catch (e) {
                 console.error("ZenLibrary Error in update:", e);
                 const content = this.shadowRoot.querySelector(".library-content");
@@ -950,8 +924,6 @@
                         textContent: `Error loading content: ${e.message}`
                     }));
                 }
-            } finally {
-                this._updateDepth = Math.max(0, (this._updateDepth || 1) - 1);
             }
         }
 
@@ -1015,14 +987,7 @@
             this.store = new ZenStore({ history: [] });
 
             // Persistent module instances for background pre-fetching
-            this._modules = {
-                downloads: null,
-                history: null,
-                media: null,
-                spaces: null,
-                boosts: null,
-                easels: null
-            };
+            this._modules = Object.fromEntries(SECTION_IDS.map(id => [id, null]));
 
             this._init();
         }
@@ -1117,34 +1082,18 @@
             // Create a minimal "shell" object for modules that need library.el helper
             const shell = this._createModuleShell();
 
-            try {
-                if (window.ZenLibraryDownloads && !this._modules.downloads) {
-                    this._modules.downloads = new window.ZenLibraryDownloads(shell);
-                    if (this._modules.downloads.init) this._modules.downloads.init();
+            // An instance the panel created before this timer fired is kept and init'ed
+            // here instead of being shadowed by a second one; every init() guards itself.
+            // Media has no init on purpose: its scan is a Downloads-folder walk.
+            for (const id of SECTION_IDS) {
+                try {
+                    const Ctor = window[SECTIONS[id].global];
+                    if (!this._modules[id] && Ctor) this._modules[id] = new Ctor(shell);
+                    const module = this._modules[id];
+                    if (typeof module?.init === "function") module.init();
+                } catch (e) {
+                    console.error(`[ZenLibrary] ${id} module initialization error`, e);
                 }
-                if (window.ZenLibraryHistory && !this._modules.history) {
-                    this._modules.history = new window.ZenLibraryHistory(shell);
-                    if (this._modules.history.init) this._modules.history.init();
-                }
-                if (window.ZenLibraryMedia && !this._modules.media) {
-                    this._modules.media = new window.ZenLibraryMedia(shell);
-                    // Media doesn't need init for now as it's not as critical
-                }
-                if (window.ZenLibrarySpaces && !this._modules.spaces) {
-                    this._modules.spaces = new window.ZenLibrarySpaces(shell);
-                }
-                if (window.ZenLibraryBoosts && !this._modules.boosts) {
-                    this._modules.boosts = new window.ZenLibraryBoosts(shell);
-                    if (this._modules.boosts.init) this._modules.boosts.init();
-                }
-                if (window.ZenLibraryEasels && !this._modules.easels) {
-                    this._modules.easels = new window.ZenLibraryEasels(shell);
-                    // Warms the index off disk so the first render of the section has
-                    // cards in it rather than an empty state that fills in a frame later.
-                    if (this._modules.easels.init) this._modules.easels.init();
-                }
-            } catch (e) {
-                console.error("ZenLibrary: Module initialization error", e);
             }
         }
 
@@ -1406,14 +1355,14 @@
 
         _readLastActiveTab() {
             try {
-                const tab = Services.prefs.getStringPref("zen.library.last-tab", "downloads");
-                if (["downloads", "history", "media", "easels", "spaces", "boosts"].includes(tab)) return tab;
+                const tab = Services.prefs.getStringPref("zen.library.last-tab", DEFAULT_TAB);
+                if (SECTION_IDS.includes(tab)) return tab;
             } catch (e) { }
-            return "downloads";
+            return DEFAULT_TAB;
         }
 
         _writeLastActiveTab(tabName) {
-            if (!["downloads", "history", "media", "easels", "spaces", "boosts"].includes(tabName)) return;
+            if (!SECTION_IDS.includes(tabName)) return;
             try {
                 Services.prefs.setStringPref("zen.library.last-tab", tabName);
             } catch (e) { }
@@ -1795,9 +1744,8 @@
                 return;
             }
 
-            // Handle Navigation within Library
-            const shadow = this._element.shadowRoot;
-            if (!shadow) return;
+            // Row navigation only while focus is inside the panel: the page beside it keeps its arrow keys.
+            if (!this._element.shadowRoot || !e.composedPath().includes(this._element)) return;
 
             if (e.code === "ArrowDown" || e.code === "ArrowUp") {
                 e.preventDefault();
@@ -2133,13 +2081,10 @@
 
         /**
          * Open the library with a specific tab selected, or close if already on that tab
-         * @param {string} tabName - One of the ids in the check below
+         * @param {string} tabName - One of SECTION_IDS
          */
         openTab(tabName) {
-            // Validate tab name
-            if (!tabName || !["downloads", "history", "media", "easels", "spaces", "boosts"].includes(tabName)) {
-                return;
-            }
+            if (!SECTION_IDS.includes(tabName)) return;
 
             // If already open on the same tab, close the library
             if (this._isOpen && this._element && this._element.activeTab === tabName) {

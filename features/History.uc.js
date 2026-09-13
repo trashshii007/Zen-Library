@@ -398,18 +398,11 @@
 
                 const clearItem = this.el("div", {
                     className: "history-nav-item history-nav-static",
+                    // Firefox's own Clear History dialog: the Tools:Sanitize command in browser.xhtml, else the Sanitizer it wraps.
                     onclick: () => {
-                        const win = Services.wm.getMostRecentWindow("browser:pure") || window;
-                        const cmd = win.document.getElementById("Tools:Sanitize") ||
-                            win.document.getElementById("cmd_sanitizeHistory");
-                        if (cmd) {
-                            cmd.doCommand();
-                            return;
-                        }
-                        try { Services.obs.notifyObservers(null, "sanitize", ""); } catch (e) { }
-                        try {
-                            win.openDialog("chrome://browser/content/sanitize.xhtml", "Sanitize", "chrome,modal,resizable=yes,centerscreen");
-                        } catch (e) { }
+                        const cmd = document.getElementById("Tools:Sanitize");
+                        if (cmd) cmd.doCommand();
+                        else window.Sanitizer?.showUI?.(window);
                     }
                 }, [
                     this.el("div", { className: "nav-icon", style: "--history-nav-icon: url('chrome://global/skin/icons/delete.svg')" }),
@@ -432,12 +425,10 @@
                 }
             };
 
-            // If already initialized (pre-fetched), skip loading and render instantly
+            // Already pre-fetched: render instantly (startLoading applies the entrance fade itself)
+            // and sync in the background once the panel transition has settled.
             if (this._initialized && this._items.length > 0) {
                 startLoading();
-                this.library.enterContent(historyContainer);
-                setTimeout(() => historyContainer.classList.add("scrollbar-visible"), 50);
-                // Trigger background sync (deferred to avoid stutter during transition)
                 setTimeout(() => this.sync(), 400);
                 return wrapper;
             }
@@ -531,6 +522,8 @@
             this._headerEls = null;
             this._chipEls = null;
             this._filterCache = null;
+            // Lives in mainPopupSet, outside anything the panel tears down itself.
+            document.getElementById("zen-history-context-menu")?.remove();
         }
 
         async fetchHistory() {
@@ -592,10 +585,11 @@
 
                 if (filtered.length === 0 && !this._isLoading) {
                     if (!reset) return;
+                    const filtered = this._searchTerm || this._activeWhenFilter !== "all";
                     const empty = this.el("div", { className: "empty-state" }, [
                         this.el("div", { className: "empty-icon history-icon" }),
-                        this.el("h3", { textContent: this._searchTerm ? "No results found" : "No history found" }),
-                        this.el("p", { textContent: "Your browsing history is empty." })
+                        this.el("h3", { textContent: filtered ? "No results found" : "No history found" }),
+                        this.el("p", { textContent: filtered ? "Try a different search or filter." : "Your browsing history is empty." })
                     ]);
                     this._container.appendChild(empty);
                     return;
@@ -747,18 +741,6 @@
             }
         }
 
-        _getBrowserWindow() {
-            if (window.gBrowser && window.SessionStore) return window;
-            if (window.opener?.gBrowser && window.opener.SessionStore) return window.opener;
-            return Services.wm.getMostRecentWindow("navigator:browser") ||
-                Services.wm.getMostRecentWindow("browser:pure") ||
-                window;
-        }
-
-        _getSessionStore(browserWindow = this._getBrowserWindow()) {
-            return browserWindow.SessionStore || window.SessionStore || window.opener?.SessionStore || null;
-        }
-
         _ensureContextMenu() {
             if (document.getElementById("zen-history-context-menu")) return;
             const popup = document.createXULElement("menupopup");
@@ -825,19 +807,10 @@
             container.innerHTML = "";
             container.classList.remove("scrollbar-visible");
 
-            const browserWindow = this._getBrowserWindow();
-            const ss = this._getSessionStore(browserWindow);
+            const ss = window.SessionStore;
             if (!ss) return;
 
-            let closedData = ss.getClosedTabData(browserWindow);
-            if (typeof closedData === "string") {
-                try {
-                    closedData = JSON.parse(closedData);
-                } catch (err) {
-                    closedData = [];
-                }
-            }
-
+            const closedData = ss.getClosedTabData(window);
             if (closedData.length === 0) {
                 container.appendChild(this.el("div", { className: "empty-state" }, [
                     this.el("div", { className: "empty-icon history-icon" }),
@@ -861,7 +834,7 @@
                     const row = this.el("div", {
                         className: "library-list-item",
                         onclick: () => {
-                            ss.undoCloseTab(browserWindow, index);
+                            ss.undoCloseTab(window, index);
                             window.gZenLibrary.close();
                         }
                     }, [
@@ -891,8 +864,7 @@
             container.innerHTML = "";
             container.classList.remove("scrollbar-visible");
 
-            const browserWindow = this._getBrowserWindow();
-            const ss = this._getSessionStore(browserWindow);
+            const ss = window.SessionStore;
             if (!ss) return;
 
             const closedData = ss.getClosedWindowData();

@@ -17,20 +17,6 @@
     overflow-x: auto;
 }
 
-.library-workspace-grid::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
-}
-
-.library-workspace-grid::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, currentColor, transparent 50%);
-    border-radius: 10px;
-}
-
-.library-workspace-grid::-webkit-scrollbar-track {
-    background: transparent;
-}
-
 
 /* === 2. CREATE WORKSPACE BUTTON === */
 
@@ -154,11 +140,13 @@
     gap: 6px;
     position: relative;
     z-index: 2;
-    padding: 0;
+    padding: 0 0 3px;
+    margin-bottom: 2px;
     opacity: 0.85;
     flex-shrink: 0;
 }
 
+/* Negative margin cancels the padding so the hover/rename box grows without moving the glyph. */
 .library-workspace-icon-container {
     width: 20px;
     height: 20px;
@@ -166,6 +154,11 @@
     align-items: center;
     justify-content: center;
     color: var(--ws-text-color);
+    padding: 4px;
+    margin: -4px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    transition: all 0.12s ease;
 }
 
 .library-workspace-icon-container[no-icon] {
@@ -224,6 +217,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--ws-text-color);
+    padding: 1px 6px;
+    margin-left: -6px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    transition: background 0.12s ease, border 0.12s ease;
 }
 
 .library-workspace-edit-button,
@@ -1156,11 +1154,10 @@
 }
 
 
-/* === 11. ANIMATIONS === */
+/* === 11. INLINE RENAME === */
 
-/* Inline Rename Input */
 .library-workspace-rename-input {
-    background: light-dark(rgba(255, 255, 255, 0), rgba(0, 0, 0, 0));
+    background: transparent;
     border: none;
     border-radius: 4px;
     padding: 2px 0px;
@@ -1172,34 +1169,4 @@
     outline: none;
     margin: 0;
     box-shadow: none;
-}
-
-/* Gold Class Header Interactions */
-.library-workspace-name {
-    transition: background 0.12s ease, border 0.12s ease;
-    padding: 1px 6px;
-    margin-left: -6px;
-    border-radius: 4px;
-    border: 1px solid transparent;
-}
-
-
-
-.library-workspace-icon-container {
-    transition: all 0.12s ease;
-    padding: 4px;
-    margin: -4px;
-    border-radius: 6px;
-    border: 1px solid transparent;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-
-
-.library-workspace-card-header {
-    margin-bottom: 2px;
-    padding-bottom: 3px;
-    border-bottom: none !important;
 }

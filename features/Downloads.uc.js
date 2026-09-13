@@ -175,22 +175,28 @@
         }
 
 
+        // The session-plus-history list for this window's privacy context. DownloadHistory
+        // caches per type, so the same list comes back for reads and removals.
+        async _historyList() {
+            const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
+            const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
+            const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
+            const isPrivate = PrivateBrowsingUtils.isWindowPrivate(window);
+            return DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
+        }
+
         async fetchDownloads() {
             try {
-                const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
                 const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
-                const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
-
-                const isPrivate = PrivateBrowsingUtils.isContentWindowPrivate(window);
-                const historyList = await DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
+                const historyList = await this._historyList();
                 const allDownloadsRaw = await historyList.getAll();
                 const liveDownloads = await this.fetchLiveDownloads(Downloads);
 
-                const downloads = allDownloadsRaw.map(d => {
+                const toItem = async (d) => {
                     const liveDownload = this.findMatchingLiveDownload(d, liveDownloads);
                     const progressSource = liveDownload || d;
                     let filename = "Unknown Filename";
-                    const targetInfo = this.resolveDownloadTarget(d, liveDownload);
+                    const targetInfo = await this.resolveDownloadTarget(d, liveDownload);
                     const targetPath = targetInfo.path;
                     const fileExists = targetInfo.exists;
 
@@ -262,13 +268,21 @@
                         raw: liveDownload || d,
                         historyRaw: d
                     };
+                };
+
                 // [audit] PERF-1 — the search term used to be applied here, which made the
                 // full download list a function of it and meant every keystroke re-ran
                 // DownloadHistory.getAll() plus an nsIFile.exists() per download. Filtering
                 // moved to renderList, so the fetched list is now search-independent and can
                 // be served from _cachedDownloads. Matches how Media does it.
-                }).filter(d => d.timestamp);
-
+                //
+                // The existence checks are IOUtils, off the main thread, in batches of 64 so a
+                // long history does not queue every stat at once (same shape as Media's scan).
+                const downloads = [];
+                for (let i = 0; i < allDownloadsRaw.length; i += 64) {
+                    const batch = await Promise.all(allDownloadsRaw.slice(i, i + 64).map(toItem));
+                    downloads.push(...batch.filter(d => d.timestamp));
+                }
                 return downloads;
 
             } catch (e) {
@@ -296,42 +310,36 @@
         // the folder: that is synchronous main-thread I/O on the common (genuinely
         // deleted) path, and size+mtime is not a strong enough identity to point "Open
         // file" at a guess.
-        resolveDownloadTarget(historyDownload, liveDownload) {
+        async resolveDownloadTarget(historyDownload, liveDownload) {
             const candidates = [
                 liveDownload?.target?.path,
                 this._renamedTargets.get(this.normalizeDownloadPath(historyDownload?.target?.path)),
                 historyDownload?.target?.path
-            ];
+            ].filter(Boolean);
 
+            // The first candidate is what we report when none of them exist.
+            let first = null;
             for (const candidate of candidates) {
-                const resolved = this.inspectTargetPath(candidate);
+                const resolved = await this.inspectTargetPath(candidate);
+                first ??= resolved;
                 if (resolved.exists) return resolved;
             }
-
-            return this.inspectTargetPath(candidates.find(Boolean));
+            return first || { path: "", exists: false, leafName: "" };
         }
 
-        inspectTargetPath(path) {
+        // IOUtils.exists, not nsIFile.exists(): this runs once per history entry on every
+        // open and sync, and the synchronous form stalls the UI on a slow or unplugged drive.
+        async inspectTargetPath(path) {
             if (!path || typeof path !== "string") {
                 return { path: "", exists: false, leafName: "" };
             }
-
-            try {
-                const file = Components.classes["@mozilla.org/file/local;1"].createInstance(Components.interfaces.nsIFile);
-                file.initWithPath(path);
-                return {
-                    path: file.path,
-                    exists: file.exists(),
-                    leafName: file.leafName || ""
-                };
-            } catch (e) {
-                const pathParts = String(path).split(/[\\/]/);
-                return {
-                    path: String(path),
-                    exists: false,
-                    leafName: pathParts.pop() || ""
-                };
+            let exists = false;
+            try { exists = await IOUtils.exists(path); } catch (e) { }
+            let leafName = "";
+            try { leafName = PathUtils.filename(path); } catch (e) {
+                leafName = path.split(/[\\/]/).pop() || "";
             }
+            return { path, exists, leafName };
         }
 
         // Download and HistoryDownload objects carry no id, so rows are keyed on what identifies one: target, source and start.
@@ -550,7 +558,8 @@
 
                             // Add drag-and-drop support for dragging to web pages
                             itemEl.setAttribute('draggable', 'true');
-                            itemEl.addEventListener('dragstart', async (e) => {
+                            // Synchronous on purpose: dataTransfer must be filled before dragstart returns.
+                            itemEl.addEventListener('dragstart', (e) => {
                                 // Only allow drag if we have a file path and file exists
                                 if (!item.targetPath || item.status === 'deleted') {
                                     e.preventDefault();
@@ -869,6 +878,8 @@
             this._disconnectMoreObserver();
             this._progressRows = null;
             this._container = null;
+            // Lives in mainPopupSet, outside anything the panel tears down itself.
+            document.getElementById("zen-downloads-context-menu")?.remove();
         }
 
         _ensureContextMenu() {
@@ -993,11 +1004,7 @@
                     await IOUtils.remove(item.targetPath);
 
                     try {
-                        const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
-                        const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
-                        const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
-                        const isPrivate = PrivateBrowsingUtils.isContentWindowPrivate(window);
-                        const list = await DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
+                        const list = await this._historyList();
                         await list.remove(item.historyRaw || item.raw);
                     } catch (historyErr) {
                         console.warn("[ZenLibrary Downloads] Deleted file but could not remove history entry:", historyErr);
@@ -1012,11 +1019,7 @@
 
             document.getElementById("zen-downloads-ctx-delete").addEventListener("command", async () => {
                 try {
-                    const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
-                    const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
-                    const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
-                    const isPrivate = PrivateBrowsingUtils.isContentWindowPrivate(window);
-                    const list = await DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
+                    const list = await this._historyList();
                     await list.remove(item.historyRaw || item.raw);
                     this.removeDownloadRow(item, itemEl);
                 } catch (err) {
@@ -1027,13 +1030,8 @@
             popup.openPopupAtScreen(e.screenX, e.screenY, true);
         }
 
-        formatBytes(bytes, decimals = 2) {
-            if (!+bytes || bytes === 0) return "0 Bytes";
-            const k = 1024;
-            const dm = decimals < 0 ? 0 : decimals;
-            const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+        formatBytes(bytes) {
+            return window.ZenLibraryUtil.formatBytes(bytes);
         }
 
         formatDuration(seconds) {
@@ -1047,49 +1045,49 @@
             return `${hours}h ${remainingMinutes}m left`;
         }
 
+        // For the DownloadURL drag flavour only; the platform MIME service is not consulted.
+        static MIME_TYPES = {
+            // Images
+            'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+            'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp',
+            'svg': 'image/svg+xml', 'ico': 'image/x-icon',
+
+            // Documents
+            'pdf': 'application/pdf', 'doc': 'application/msword',
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'xls': 'application/vnd.ms-excel',
+            'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'ppt': 'application/vnd.ms-powerpoint',
+            'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+
+            // Text
+            'txt': 'text/plain', 'html': 'text/html', 'css': 'text/css',
+            'js': 'text/javascript', 'json': 'application/json',
+            'xml': 'text/xml', 'csv': 'text/csv',
+
+            // Audio
+            'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg',
+            'flac': 'audio/flac', 'aac': 'audio/aac', 'm4a': 'audio/mp4',
+
+            // Video
+            'mp4': 'video/mp4', 'avi': 'video/x-msvideo', 'mov': 'video/quicktime',
+            'wmv': 'video/x-ms-wmv', 'flv': 'video/x-flv', 'webm': 'video/webm',
+            'mkv': 'video/x-matroska',
+
+            // Archives
+            'zip': 'application/zip', 'rar': 'application/x-rar-compressed',
+            '7z': 'application/x-7z-compressed', 'tar': 'application/x-tar',
+            'gz': 'application/gzip',
+
+            // Executables
+            'exe': 'application/x-msdownload', 'msi': 'application/x-msi',
+            'deb': 'application/x-debian-package', 'rpm': 'application/x-rpm'
+        };
+
         getContentTypeFromFilename(filename) {
             if (!filename) return 'application/octet-stream';
-
             const ext = filename.toLowerCase().split('.').pop();
-            const mimeTypes = {
-                // Images
-                'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
-                'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp',
-                'svg': 'image/svg+xml', 'ico': 'image/x-icon',
-
-                // Documents
-                'pdf': 'application/pdf', 'doc': 'application/msword',
-                'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                'xls': 'application/vnd.ms-excel',
-                'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                'ppt': 'application/vnd.ms-powerpoint',
-                'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-
-                // Text
-                'txt': 'text/plain', 'html': 'text/html', 'css': 'text/css',
-                'js': 'text/javascript', 'json': 'application/json',
-                'xml': 'text/xml', 'csv': 'text/csv',
-
-                // Audio
-                'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg',
-                'flac': 'audio/flac', 'aac': 'audio/aac', 'm4a': 'audio/mp4',
-
-                // Video
-                'mp4': 'video/mp4', 'avi': 'video/x-msvideo', 'mov': 'video/quicktime',
-                'wmv': 'video/x-ms-wmv', 'flv': 'video/x-flv', 'webm': 'video/webm',
-                'mkv': 'video/x-matroska',
-
-                // Archives
-                'zip': 'application/zip', 'rar': 'application/x-rar-compressed',
-                '7z': 'application/x-7z-compressed', 'tar': 'application/x-tar',
-                'gz': 'application/gzip',
-
-                // Executables
-                'exe': 'application/x-msdownload', 'msi': 'application/x-msi',
-                'deb': 'application/x-debian-package', 'rpm': 'application/x-rpm'
-            };
-
-            return mimeTypes[ext] || 'application/octet-stream';
+            return ZenLibraryDownloads.MIME_TYPES[ext] || 'application/octet-stream';
         }
     }
 

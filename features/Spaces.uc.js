@@ -7,8 +7,9 @@
 
         static getWorkspaces() { return window.gZenWorkspaces ? window.gZenWorkspaces.getWorkspaces() : []; }
 
+        // Fallback `true` matches preferences.json: Sine only writes a defaultValue when the settings page is opened.
         static atgCompatEnabled() {
-            try { return Services.prefs.getBoolPref("zen.library.compat.advanced-tab-groups", false); } catch (e) { return false; }
+            try { return Services.prefs.getBoolPref("zen.library.compat.advanced-tab-groups", true); } catch (e) { return true; }
         }
 
         static calculatePanelWidth(count) {
@@ -238,7 +239,8 @@
 
                 const menuBtn = document.createXULElement("toolbarbutton");
                 menuBtn.className = "library-workspace-menu-button";
-                menuBtn.setAttribute("title", "Space Options");
+                // XUL tooltips read tooltiptext, not title.
+                menuBtn.setAttribute("tooltiptext", "Space Options");
                 menuBtn.setAttribute("zen-workspace-id", ws.uuid);
                 menuBtn.appendChild(this.el("div"));
 
@@ -2503,7 +2505,7 @@
             popup.appendChild(themeItem);
             popup.appendChild(document.createXULElement("menuseparator"));
             popup.appendChild(unloadItem);
-            document.getElementById("mainPopupSet")?.appendChild(popup) || document.body.appendChild(popup);
+            (document.getElementById("mainPopupSet") || document.body).appendChild(popup);
         }
 
         showWorkspaceMenu(e, ws) {
@@ -2572,12 +2574,12 @@
                 nameSpan.classList.remove("renaming");
             };
 
-            // Global mousedown listener to cancel rename when clicking elsewhere
+            // Cancel when the press lands outside the name. composedPath, not ev.target: seen
+            // from the window, every event from inside the shadow root is retargeted to the
+            // <zen-library> host, so a contains() check cancelled the rename on a click inside
+            // the input itself.
             const onClickOutside = (ev) => {
-                // Allow clicking inside the name container (input or padding)
-                if (!nameSpan.contains(ev.target)) {
-                    finish(originalName);
-                }
+                if (!ev.composedPath().includes(nameSpan)) finish(originalName);
             };
 
             // Use capture phase to ensure we catch the click before blur
@@ -2622,9 +2624,6 @@
             if (window.gZenWorkspaces.activeWorkspace !== ws.uuid) {
                 await window.gZenWorkspaces.changeWorkspaceWithID(ws.uuid);
             }
-
-            // Force focus to the main window content to ensure commands work
-            if (window.content) window.content.focus();
 
             // Trigger after a safe delay
             setTimeout(() => {

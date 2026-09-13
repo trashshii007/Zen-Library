@@ -10,8 +10,9 @@
 "use strict";
 
 (function () {
-    if (window.ZenLibraryEasels) return;
-
+    // No `if (window.ZenLibraryEasels) return;` guard, same as the other sections: the shell
+    // rebuilds its instances on every Sine reload, and this must be redefined for that to
+    // pick up an edit here.
     const STORE_URL = "chrome://sine/content/zen-easel/background/store.sys.mjs";
 
     class ZenLibraryEasels {

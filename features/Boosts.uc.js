@@ -55,15 +55,9 @@
                     }
                 }
             };
+            // Released in destroy(), which the controller runs on window unload and on a Sine rebuild.
             Services.obs.addObserver(this._observer, "zen-boosts-update");
             Services.obs.addObserver(this._observer, "zen-boosts-active-change");
-            window.addEventListener("unload", () => {
-                if (this._observer) {
-                    Services.obs.removeObserver(this._observer, "zen-boosts-update");
-                    Services.obs.removeObserver(this._observer, "zen-boosts-active-change");
-                    this._observer = null;
-                }
-            }, { once: true });
         }
 
         destroy() {
@@ -161,13 +155,10 @@
             this._startObserving();
 
             if (this._initialized) {
+                // Stale list (a boost changed while the section was hidden): re-fetch first, else paint the cache now.
                 if (this._stale) {
                     this._stale = false;
-                    this.fetchBoosts().then(() => {
-                        this.renderList();
-                        this.library.enterContent(container);
-                        setTimeout(() => container.classList.add("scrollbar-visible"), 100);
-                    });
+                    this.fetchBoosts().then(() => this.renderList());
                 } else {
                     this.renderList();
                 }
@@ -219,7 +210,7 @@
             popup.appendChild(exportItem);
             popup.appendChild(document.createXULElement("menuseparator"));
             popup.appendChild(deleteItem);
-            document.getElementById("mainPopupSet")?.appendChild(popup) || document.body.appendChild(popup);
+            (document.getElementById("mainPopupSet") || document.body).appendChild(popup);
         }
 
         _showContextMenu(event, domain, boost, row, onDeleted) {

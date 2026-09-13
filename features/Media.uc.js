@@ -533,14 +533,12 @@
                 return true;
             });
 
-            // Update count
+            // The panel width follows the filtered count (calculateMediaWidth). Width only —
+            // a full update() here re-entered the section render and could remount the grid.
             const prevCount = this._itemCount;
             this._itemCount = mediaItems.length;
             window.gZenLibraryMediaCount = this._itemCount;
-
-            if (this._itemCount !== prevCount) {
-                if (this.library.update) this.library.update();
-            }
+            if (this._itemCount !== prevCount) this.library.syncWidth?.();
 
             if (mediaItems.length === 0) {
                 this._container.innerHTML = "";
@@ -1363,13 +1361,8 @@
             });
         }
 
-        formatBytes(bytes, decimals = 2) {
-            if (!+bytes || bytes === 0) return "0 Bytes";
-            const k = 1024;
-            const dm = decimals < 0 ? 0 : decimals;
-            const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+        formatBytes(bytes) {
+            return window.ZenLibraryUtil.formatBytes(bytes);
         }
 
         // [audit] LEAK-1 — every cover-art blob: URL and cached Gecko File is released here; without it they were pinned for the window's lifetime.
@@ -1379,6 +1372,8 @@
             this._disarmContextMenuSuppress();
             document.documentElement.removeAttribute("zen-library-dragging");
             this._disconnectLazyObservers();
+            // Lives in mainPopupSet, outside anything the panel tears down itself.
+            document.getElementById("zen-media-context-menu")?.remove();
 
             for (const url of this._objectUrls) {
                 try { URL.revokeObjectURL(url); } catch (e) { }
