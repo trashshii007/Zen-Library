@@ -49,6 +49,34 @@
             // Write-only here; Advanced Tab Groups' patched renderItemRecursive (compat pref off) writes into it too, so it must exist.
             this._folderExpansion = new Map();
             this._lastRenderAt = 0;
+            this._onWorkspacesUIUpdate = null;
+            this._onWorkspaceChange = null;
+        }
+
+        // The cards' "…" menu is Zen's own popup, so a space deleted, created or reordered from it
+        // (or from the sidebar, or another window) never comes back through this module. Zen fires
+        // ZenWorkspacesUIUpdate once the set or order of spaces has changed and _workspaceCache is
+        // replaced; a plain switch only runs the change listeners. Both are released in destroy().
+        init() {
+            if (this._onWorkspacesUIUpdate) return;
+            this._onWorkspacesUIUpdate = () => this.syncWithWorkspaces();
+            window.addEventListener("ZenWorkspacesUIUpdate", this._onWorkspacesUIUpdate);
+            if (window.gZenWorkspaces?.addChangeListeners) {
+                // Awaited inside Zen's switch; it must never throw into that flow.
+                this._onWorkspaceChange = async () => { try { this.syncActiveCard(); } catch (e) { } };
+                window.gZenWorkspaces.addChangeListeners(this._onWorkspaceChange);
+            }
+        }
+
+        destroy() {
+            if (this._onWorkspacesUIUpdate) {
+                window.removeEventListener("ZenWorkspacesUIUpdate", this._onWorkspacesUIUpdate);
+                this._onWorkspacesUIUpdate = null;
+            }
+            if (this._onWorkspaceChange) {
+                try { window.gZenWorkspaces?.removeChangeListeners(this._onWorkspaceChange); } catch (e) { }
+                this._onWorkspaceChange = null;
+            }
         }
 
         get el() { return this.library.el.bind(this.library); }
@@ -366,8 +394,8 @@
                         if (newIndex !== originalIndex) {
                             if (window.gZenWorkspaces && window.gZenWorkspaces.reorderWorkspace) {
                                 window.gZenWorkspaces.reorderWorkspace(ws.uuid, newIndex);
-                                // Nothing here observes workspace changes, and reorderWorkspace may
-                                // clamp the index, so resync rather than trust the dropped position.
+                                // The DOM already sits in the dropped order, so the ZenWorkspacesUIUpdate
+                                // this fires is a no-op; reorderWorkspace may still clamp the index, so resync.
                                 setTimeout(() => {
                                     if (this.library.update) this.library.update();
                                 }, 100);
@@ -2454,6 +2482,50 @@
             if (skipIfFresherThan && Date.now() - this._lastRenderAt < skipIfFresherThan) return;
             if (this._draggedTabInfo) return;
             for (const ws of ZenLibrarySpaces.getWorkspaces()) this.renderIntoExistingCard(ws.uuid);
+        }
+
+        // The grid of the open panel, or null. After close() `library` still points at the dropped element.
+        _mountedGrid() {
+            if (!this.library?.isConnected) return null;
+            return this.library.shadowRoot?.querySelector(".library-workspace-grid") || null;
+        }
+
+        // Rebuild the grid when the cards no longer match Zen's spaces (a delete, create or reorder
+        // done outside this module); a rebuild mid-drag would pull the dragged card out from under
+        // the pointer, so those wait for the next update.
+        syncWithWorkspaces() {
+            const grid = this._mountedGrid();
+            if (!grid || grid.hasAttribute("dragging-workspace") || this._draggedTabInfo) return;
+            const rendered = Array.from(grid.querySelectorAll(":scope > .library-workspace-card"), card => card.getAttribute("workspace-id"));
+            const current = ZenLibrarySpaces.getWorkspaces().map(ws => ws.uuid);
+            const same = rendered.length === current.length && rendered.every((id, i) => id === current[i]);
+            if (same) this.syncActiveCard();
+            else this.library.update?.();
+            // The [active] marker has already moved by now (the change listener ran inside the switch),
+            // so any deletion re-applies; for a non-focused space that is one redundant, harmless call.
+            if (rendered.some(id => !current.includes(id))) this._reapplyActiveTheme();
+        }
+
+        // Deleting the focused space from the cards' menu left the window in the deleted space's
+        // light/dark scheme (zen-should-be-dark-mode on :root) instead of the one Zen switched to.
+        // Zen applies that in gZenThemePicker.onWorkspaceChange from a rAF inside the switch; this
+        // event fires once that switch has resolved, so re-run it for the space that took focus.
+        // It is the same call every ordinary switch makes, so repeating it is safe.
+        _reapplyActiveTheme() {
+            const ws = window.gZenWorkspaces?.getActiveWorkspace?.();
+            if (!ws || typeof window.gZenThemePicker?.onWorkspaceChange !== "function") return;
+            requestAnimationFrame(() => {
+                try { window.gZenThemePicker.onWorkspaceChange(ws); } catch (e) { console.warn("[ZenLibrary Spaces] theme re-apply failed:", e); }
+            });
+        }
+
+        syncActiveCard() {
+            const grid = this._mountedGrid();
+            if (!grid) return;
+            const activeId = window.gZenWorkspaces?.activeWorkspace;
+            for (const card of grid.querySelectorAll(":scope > .library-workspace-card")) {
+                card.toggleAttribute("active", card.getAttribute("workspace-id") === activeId);
+            }
         }
 
         createWorkspaceSeparator(wsId) {
