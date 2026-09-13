@@ -15,10 +15,20 @@
             this._moreObserver = null;
             this._activeFilter = "all";
             this._filterLabelEl = null;
+            this._folderScanCache = { folder: "", at: 0, items: null };
+            this._folderScanPromise = null;
+            this._downloadsScanPrefObserver = {
+                observe: () => this._handleDownloadsScanPrefChange()
+            };
+            try {
+                Services.prefs.addObserver("zen.library.downloads.scan-folder", this._downloadsScanPrefObserver);
+            } catch (e) { }
         }
 
         static INITIAL_RENDER_LIMIT = 50;
         static RENDER_BATCH_SIZE = 50;
+        static SCAN_CHUNK_SIZE = 25;
+        static SCAN_CACHE_TTL_MS = 30000;
         // Native zen-library DOWNLOAD_FILTERS, mapped onto this module's status strings.
         static FILTERS = [
             { id: "all", label: "All" },
@@ -175,28 +185,22 @@
         }
 
 
-        // The session-plus-history list for this window's privacy context. DownloadHistory
-        // caches per type, so the same list comes back for reads and removals.
-        async _historyList() {
-            const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
-            const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
-            const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
-            const isPrivate = PrivateBrowsingUtils.isWindowPrivate(window);
-            return DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
-        }
-
         async fetchDownloads() {
             try {
+                const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
                 const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
-                const historyList = await this._historyList();
+                const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
+
+                const isPrivate = PrivateBrowsingUtils.isContentWindowPrivate(window);
+                const historyList = await DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
                 const allDownloadsRaw = await historyList.getAll();
                 const liveDownloads = await this.fetchLiveDownloads(Downloads);
 
-                const toItem = async (d) => {
+                const downloads = allDownloadsRaw.map(d => {
                     const liveDownload = this.findMatchingLiveDownload(d, liveDownloads);
                     const progressSource = liveDownload || d;
                     let filename = "Unknown Filename";
-                    const targetInfo = await this.resolveDownloadTarget(d, liveDownload);
+                    const targetInfo = this.resolveDownloadTarget(d, liveDownload);
                     const targetPath = targetInfo.path;
                     const fileExists = targetInfo.exists;
 
@@ -255,34 +259,30 @@
 
                     return {
                         id: this._itemKey(d),
-                        filename: String(filename || "FN_MISSING"),
+                        filename: String(filename || "Unknown Filename"),
                         size: totalBytes,
                         progressBytes,
                         totalBytes,
                         percent: totalBytes > 0 ? Math.min(100, Math.max(0, (progressBytes / totalBytes) * 100)) : 0,
                         estimatedSeconds: this.estimateRemainingSeconds(progressSource, progressBytes, totalBytes),
                         status: status,
-                        url: String(d.source?.url || "URL_MISSING"),
+                        url: d.source?.url ? String(d.source.url) : "",
                         timestamp: d.endTime || d.startTime || Date.now(),
                         targetPath: String(targetPath || ""),
                         raw: liveDownload || d,
                         historyRaw: d
                     };
-                };
-
                 // [audit] PERF-1 — the search term used to be applied here, which made the
                 // full download list a function of it and meant every keystroke re-ran
                 // DownloadHistory.getAll() plus an nsIFile.exists() per download. Filtering
                 // moved to renderList, so the fetched list is now search-independent and can
                 // be served from _cachedDownloads. Matches how Media does it.
-                //
-                // The existence checks are IOUtils, off the main thread, in batches of 64 so a
-                // long history does not queue every stat at once (same shape as Media's scan).
-                const downloads = [];
-                for (let i = 0; i < allDownloadsRaw.length; i += 64) {
-                    const batch = await Promise.all(allDownloadsRaw.slice(i, i + 64).map(toItem));
-                    downloads.push(...batch.filter(d => d.timestamp));
+                }).filter(d => d.timestamp);
+
+                if (this._shouldScanDownloadsFolder()) {
+                    return await this.mergeFolderScan(downloads, Downloads);
                 }
+
                 return downloads;
 
             } catch (e) {
@@ -303,43 +303,221 @@
             }
         }
 
+        _shouldScanDownloadsFolder() {
+            try {
+                return Services.prefs.getBoolPref("zen.library.downloads.scan-folder", false);
+            } catch (e) {
+                return false;
+            }
+        }
+
+        _clearFolderScanCache() {
+            this._folderScanCache = { folder: "", at: 0, items: null };
+            this._folderScanPromise = null;
+        }
+
+        _handleDownloadsScanPrefChange() {
+            this._clearFolderScanCache();
+            this._cachedDownloads = null;
+            if (!this._canRender(this._renderToken, this._container)) return;
+
+            const token = ++this._renderToken;
+            const container = this._container;
+            this._visibleLimit = ZenLibraryDownloads.INITIAL_RENDER_LIMIT;
+            this._disconnectMoreObserver();
+            container.innerHTML = "";
+            container.appendChild(this.el("div", { className: "empty-state" }, [
+                this.el("div", { className: "empty-icon downloads-icon" }),
+                this.el("h3", { textContent: "Loading downloads..." }),
+                this.el("p", { textContent: "Refreshing your Downloads view." })
+            ]));
+
+            this.fetchDownloads().then(downloads => {
+                if (!this._canRender(token, container)) return;
+                this._cachedDownloads = downloads;
+                this.renderList(downloads);
+            }).catch(e => console.error("ZenLibrary Downloads live config refresh error:", e));
+        }
+
+        async mergeFolderScan(downloads, Downloads) {
+            try {
+                const scanned = await this.scanDownloadsFolder(Downloads, downloads);
+                if (!scanned.length) return downloads;
+                return downloads.concat(scanned);
+            } catch (e) {
+                console.warn("[ZenLibrary Downloads] Folder scan failed:", e);
+                return downloads;
+            }
+        }
+
+        async scanDownloadsFolder(Downloads, knownDownloads = []) {
+            const folder = await this.getDownloadsFolderPath(Downloads);
+            if (!folder) return [];
+
+            const knownPaths = new Set(
+                knownDownloads
+                    .map(d => this.normalizeDownloadPath(d.targetPath))
+                    .filter(Boolean)
+            );
+
+            if (
+                this._folderScanCache.folder === folder &&
+                this._folderScanCache.items &&
+                Date.now() - this._folderScanCache.at < ZenLibraryDownloads.SCAN_CACHE_TTL_MS
+            ) {
+                return this._folderScanCache.items.filter(item => {
+                    const normalized = this.normalizeDownloadPath(item.targetPath);
+                    if (!normalized || knownPaths.has(normalized)) return false;
+                    knownPaths.add(normalized);
+                    return true;
+                });
+            }
+
+            if (this._folderScanPromise) {
+                const cached = await this._folderScanPromise;
+                return cached.filter(item => {
+                    const normalized = this.normalizeDownloadPath(item.targetPath);
+                    if (!normalized || knownPaths.has(normalized)) return false;
+                    knownPaths.add(normalized);
+                    return true;
+                });
+            }
+
+            this._folderScanPromise = this.scanDownloadsFolderFiles(folder);
+            let scanned = [];
+            try {
+                scanned = await this._folderScanPromise;
+                this._folderScanCache = { folder, at: Date.now(), items: scanned };
+            } finally {
+                this._folderScanPromise = null;
+            }
+
+            return scanned.filter(item => {
+                const normalized = this.normalizeDownloadPath(item.targetPath);
+                if (!normalized || knownPaths.has(normalized)) return false;
+                knownPaths.add(normalized);
+                return true;
+            });
+        }
+
+        async scanDownloadsFolderFiles(folder) {
+            const scanned = [];
+            let children = [];
+            try {
+                children = await IOUtils.getChildren(folder);
+            } catch (e) {
+                console.warn("[ZenLibrary Downloads] Could not read Downloads folder:", e);
+                return [];
+            }
+
+            for (let i = 0; i < children.length; i += ZenLibraryDownloads.SCAN_CHUNK_SIZE) {
+                const chunk = children.slice(i, i + ZenLibraryDownloads.SCAN_CHUNK_SIZE);
+                const entries = await Promise.all(chunk.map(async path => {
+                    try {
+                        const info = await IOUtils.stat(path);
+                        if (info.type && info.type !== "regular" && info.type !== "directory") return null;
+                        return this.createScannedDownloadItem(path, info);
+                    } catch (e) {
+                        return null;
+                    }
+                }));
+                for (const entry of entries) {
+                    if (entry) scanned.push(entry);
+                }
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+
+            return scanned;
+        }
+
+        async getDownloadsFolderPath(Downloads) {
+            try {
+                if (Downloads && typeof Downloads.getSystemDownloadsDirectory === "function") {
+                    const path = await Downloads.getSystemDownloadsDirectory();
+                    if (path) return path;
+                }
+            } catch (e) { }
+
+            try {
+                return Services.dirsvc.get("DfltDwnld", Ci.nsIFile).path;
+            } catch (e) {
+                return "";
+            }
+        }
+
+        createScannedDownloadItem(path, info) {
+            const normalized = this.normalizeDownloadPath(path);
+            if (!normalized) return null;
+
+            try {
+                const filename = this.leafNameFromPath(path);
+                const timestamp = info.lastModified || info.creationTime || Date.now();
+                const size = Number(info.size) || 0;
+                const isFolder = info.type === "directory";
+                return {
+                    id: `folder-scan|${normalized}`,
+                    filename,
+                    size,
+                    progressBytes: isFolder ? 0 : size,
+                    totalBytes: isFolder ? 0 : size,
+                    percent: isFolder || size > 0 ? 100 : 0,
+                    estimatedSeconds: null,
+                    status: "completed",
+                    url: "",
+                    timestamp,
+                    targetPath: path,
+                    raw: null,
+                    historyRaw: null,
+                    scannedFromFolder: true,
+                    isFolder
+                };
+            } catch (e) {
+                return null;
+            }
+        }
+
         // A download the user renamed from this panel keeps its history entry pointing at
         // the old path, so resolving straight from `target.path` reports it deleted. The
         // live download wins if there is one, then any rename we recorded ourselves, then
-        // whatever history has. Deliberately no filesystem search for a same-size file in
-        // the folder: that is synchronous main-thread I/O on the common (genuinely
-        // deleted) path, and size+mtime is not a strong enough identity to point "Open
-        // file" at a guess.
-        async resolveDownloadTarget(historyDownload, liveDownload) {
+        // whatever history has. This resolver still avoids guessing a renamed path from a
+        // same-size file; the optional Downloads-folder scan below adds independent files
+        // as their own rows instead of silently retargeting a history row.
+        resolveDownloadTarget(historyDownload, liveDownload) {
             const candidates = [
                 liveDownload?.target?.path,
                 this._renamedTargets.get(this.normalizeDownloadPath(historyDownload?.target?.path)),
                 historyDownload?.target?.path
-            ].filter(Boolean);
+            ];
 
-            // The first candidate is what we report when none of them exist.
-            let first = null;
             for (const candidate of candidates) {
-                const resolved = await this.inspectTargetPath(candidate);
-                first ??= resolved;
+                const resolved = this.inspectTargetPath(candidate);
                 if (resolved.exists) return resolved;
             }
-            return first || { path: "", exists: false, leafName: "" };
+
+            return this.inspectTargetPath(candidates.find(Boolean));
         }
 
-        // IOUtils.exists, not nsIFile.exists(): this runs once per history entry on every
-        // open and sync, and the synchronous form stalls the UI on a slow or unplugged drive.
-        async inspectTargetPath(path) {
+        inspectTargetPath(path) {
             if (!path || typeof path !== "string") {
                 return { path: "", exists: false, leafName: "" };
             }
-            let exists = false;
-            try { exists = await IOUtils.exists(path); } catch (e) { }
-            let leafName = "";
-            try { leafName = PathUtils.filename(path); } catch (e) {
-                leafName = path.split(/[\\/]/).pop() || "";
+
+            try {
+                const file = Components.classes["@mozilla.org/file/local;1"].createInstance(Components.interfaces.nsIFile);
+                file.initWithPath(path);
+                return {
+                    path: file.path,
+                    exists: file.exists(),
+                    leafName: file.leafName || ""
+                };
+            } catch (e) {
+                const pathParts = String(path).split(/[\\/]/);
+                return {
+                    path: String(path),
+                    exists: false,
+                    leafName: pathParts.pop() || ""
+                };
             }
-            return { path, exists, leafName };
         }
 
         // Download and HistoryDownload objects carry no id, so rows are keyed on what identifies one: target, source and start.
@@ -372,6 +550,11 @@
 
         normalizeDownloadPath(path) {
             return typeof path === "string" ? path.replace(/\\/g, "/").toLowerCase() : "";
+        }
+
+        leafNameFromPath(path) {
+            const parts = String(path || "").split(/[\\/]/);
+            return parts.pop() || "Unknown Filename";
         }
 
         estimateRemainingSeconds(download, progressBytes, totalBytes) {
@@ -543,13 +726,13 @@
                             // it from a proper file: URI instead.
                             itemEl.setAttribute("icon", window.ZenLibraryUtil.fileIconUrl(item.targetPath));
                             itemEl.setAttribute("title", item.filename);
-                            itemEl.setAttribute("subtitle", `${this.formatBytes(item.size)} • ${item.status}`);
+                            itemEl.setAttribute("subtitle", item.isFolder ? "Folder" : `${this.formatBytes(item.size)} • ${item.status}`);
                             itemEl.setAttribute("time", timeStr);
 
                             itemEl.onclick = (e) => {
-                                // Ignore clicks on the folder icon, handled separately
-                                if (e.target.closest('.item-folder-icon')) return;
-                                this.handleAction(item, "open");
+                                if (e.target.closest('.download-row-actions')) return;
+                                if (item.status === "deleted") return;
+                                this.handleAction(item, "show");
                             };
                             itemEl.oncontextmenu = (e) => {
                                 e.preventDefault();
@@ -557,11 +740,10 @@
                             };
 
                             // Add drag-and-drop support for dragging to web pages
-                            itemEl.setAttribute('draggable', 'true');
-                            // Synchronous on purpose: dataTransfer must be filled before dragstart returns.
-                            itemEl.addEventListener('dragstart', (e) => {
+                            itemEl.setAttribute('draggable', item.isFolder ? 'false' : 'true');
+                            itemEl.addEventListener('dragstart', async (e) => {
                                 // Only allow drag if we have a file path and file exists
-                                if (!item.targetPath || item.status === 'deleted') {
+                                if (!item.targetPath || item.status === 'deleted' || item.isFolder) {
                                     e.preventDefault();
                                     return;
                                 }
@@ -599,18 +781,21 @@
                                 }
                             });
 
-                            const folderIcon = this.el("div", {
-                                className: `item-folder-icon${item.status === "deleted" ? " disabled" : ""}`,
-                                title: item.status === "deleted" ? "File deleted" : "Show in Folder",
-                                onclick: (e) => {
-                                    e.stopPropagation();
-                                    if (item.status === "deleted") return;
-                                    this.handleAction(item, "show");
-                                },
-                                innerHTML: `<div class="item-folder-mask"></div>`
-                            });
+                            const subtitle = itemEl.querySelector(".item-url");
+                            if (subtitle) {
+                                subtitle.textContent = "";
+                                subtitle.appendChild(this.el("span", {
+                                    className: "download-row-status",
+                                    textContent: item.isFolder ? "Folder" : `${this.formatBytes(item.size)} • ${item.status}`
+                                }));
+                                subtitle.appendChild(this.el("span", {
+                                    className: "download-row-url",
+                                    textContent: this.formatDisplayUrl(item.url)
+                                }));
+                            }
 
-                            itemEl.appendSecondaryAction(folderIcon);
+                            const actions = this.createRowActions(item, itemEl);
+                            itemEl.appendSecondaryAction(actions);
                             this._container.appendChild(itemEl);
                         } catch (itemError) {
                             console.error("ZenLibrary Error processing download item:", itemError, item);
@@ -664,6 +849,34 @@
             const url = window.ZenLibraryUtil.fileIconUrl(targetPath);
             if (!url) return "";
             return `background-image: url("${window.ZenLibraryUtil.cssUrl(url)}");`;
+        }
+
+        createRowActions(item, itemEl) {
+            const actions = this.el("div", { className: "download-row-actions zen-library-row-actions" });
+
+            if (item.status === "failed" || item.status === "canceled" || item.status === "cancelled") {
+                actions.appendChild(this.el("button", {
+                    className: "download-row-action download-row-retry",
+                    title: "Retry",
+                    "aria-label": "Retry",
+                    onclick: (e) => {
+                        e.stopPropagation();
+                        this.handleAction(item, "resume");
+                    }
+                }, [this.el("span", { className: "download-row-action-icon retry-icon", "aria-hidden": "true" })]));
+            }
+
+            actions.appendChild(this.el("button", {
+                className: "download-row-action download-row-more",
+                title: "More actions",
+                "aria-label": "More actions",
+                onclick: (e) => {
+                    e.stopPropagation();
+                    this._showContextMenu(e, item, itemEl, e.currentTarget);
+                }
+            }, [this.el("span", { className: "download-row-action-icon more-icon", "aria-hidden": "true" })]));
+
+            return actions;
         }
 
         createProgressItem(item) {
@@ -790,6 +1003,14 @@
                     return;
                 }
 
+                if (action === "copy-link") {
+                    if (!item.url) return;
+                    const helper = Components.classes["@mozilla.org/widget/clipboardhelper;1"]
+                        .getService(Components.interfaces.nsIClipboardHelper);
+                    helper.copyString(item.url);
+                    return;
+                }
+
                 if (action === "pause") {
                     if (item.raw?.cancel) Promise.resolve(item.raw.cancel()).catch(() => { });
                     setTimeout(() => this.sync(), 150);
@@ -815,7 +1036,29 @@
                 const file = Components.classes["@mozilla.org/file/local;1"].createInstance(Components.interfaces.nsIFile);
                 file.initWithPath(item.targetPath);
 
-                if (action === "open-external" || action === "open") {
+                if (action === "copy-file") {
+                    if (!file.exists()) {
+                        Services.prompt.alert(window, "Zen Library", "That file is no longer there.");
+                        return;
+                    }
+
+                    const transferable = Components.classes["@mozilla.org/widget/transferable;1"]
+                        .createInstance(Components.interfaces.nsITransferable);
+                    transferable.init(null);
+                    transferable.addDataFlavor("application/x-moz-file");
+                    transferable.setTransferData("application/x-moz-file", file);
+
+                    const fileUrl = Services.io.newFileURI(file).spec;
+                    const urlData = Components.classes["@mozilla.org/supports-string;1"]
+                        .createInstance(Components.interfaces.nsISupportsString);
+                    urlData.data = `${fileUrl}\n${item.filename || file.leafName}`;
+                    transferable.addDataFlavor("text/x-moz-url");
+                    transferable.setTransferData("text/x-moz-url", urlData);
+
+                    const clipboard = Components.classes["@mozilla.org/widget/clipboard;1"]
+                        .getService(Components.interfaces.nsIClipboard);
+                    clipboard.setData(transferable, null, Components.interfaces.nsIClipboard.kGlobalClipboard);
+                } else if (action === "open-external" || action === "open") {
                     if (!file.exists()) {
                         // Services.prompt, not alert(): alert() in a chrome window blocks the
                         // whole window rather than just this dialog.
@@ -874,12 +1117,19 @@
                 this._progressTimer = null;
             }
             this._cachedDownloads = null;
+            this._clearFolderScanCache();
             this._renderToken++;
+            try {
+                Services.prefs.removeObserver("zen.library.downloads.scan-folder", this._downloadsScanPrefObserver);
+            } catch (e) { }
             this._disconnectMoreObserver();
+            const popup = document.getElementById("zen-downloads-context-menu");
+            if (popup) {
+                try { popup.hidePopup(); } catch (e) { }
+                popup.remove();
+            }
             this._progressRows = null;
             this._container = null;
-            // Lives in mainPopupSet, outside anything the panel tears down itself.
-            document.getElementById("zen-downloads-context-menu")?.remove();
         }
 
         _ensureContextMenu() {
@@ -891,11 +1141,23 @@
             // reachable as a deliberate act and not only as a side effect of clicking a row.
             const openFileItem = document.createXULElement("menuitem");
             openFileItem.id = "zen-downloads-ctx-open-file";
-            openFileItem.setAttribute("label", "Open file");
+            openFileItem.setAttribute("label", "Open");
+
+            const showItem = document.createXULElement("menuitem");
+            showItem.id = "zen-downloads-ctx-show";
+            showItem.setAttribute("label", "Show in Folder");
+
+            const copyFileItem = document.createXULElement("menuitem");
+            copyFileItem.id = "zen-downloads-ctx-copy-file";
+            copyFileItem.setAttribute("label", "Copy file");
 
             const openLinkItem = document.createXULElement("menuitem");
             openLinkItem.id = "zen-downloads-ctx-open-link";
             openLinkItem.setAttribute("label", "Open Download Link");
+
+            const copyLinkItem = document.createXULElement("menuitem");
+            copyLinkItem.id = "zen-downloads-ctx-copy-link";
+            copyLinkItem.setAttribute("label", "Copy link");
 
             const pauseItem = document.createXULElement("menuitem");
             pauseItem.id = "zen-downloads-ctx-pause";
@@ -907,14 +1169,17 @@
 
             const deleteItem = document.createXULElement("menuitem");
             deleteItem.id = "zen-downloads-ctx-delete";
-            deleteItem.setAttribute("label", "Delete from history");
+            deleteItem.setAttribute("label", "Hide");
 
             const deleteFileItem = document.createXULElement("menuitem");
             deleteFileItem.id = "zen-downloads-ctx-delete-file";
-            deleteFileItem.setAttribute("label", "Delete file");
+            deleteFileItem.setAttribute("label", "Trash");
 
             popup.appendChild(openFileItem);
+            popup.appendChild(showItem);
+            popup.appendChild(copyFileItem);
             popup.appendChild(openLinkItem);
+            popup.appendChild(copyLinkItem);
             popup.appendChild(pauseItem);
             popup.appendChild(document.createXULElement("menuseparator"));
             popup.appendChild(renameItem);
@@ -924,23 +1189,44 @@
             (document.getElementById("mainPopupSet") || document.body).appendChild(popup);
         }
 
-        _showContextMenu(e, item, itemEl) {
+        _showContextMenu(e, item, itemEl, anchor = null) {
             this._ensureContextMenu();
             const popup = document.getElementById("zen-downloads-context-menu");
 
-            for (const id of ["zen-downloads-ctx-open-file", "zen-downloads-ctx-open-link", "zen-downloads-ctx-pause", "zen-downloads-ctx-rename", "zen-downloads-ctx-delete-file", "zen-downloads-ctx-delete"]) {
+            for (const id of ["zen-downloads-ctx-open-file", "zen-downloads-ctx-show", "zen-downloads-ctx-copy-file", "zen-downloads-ctx-open-link", "zen-downloads-ctx-copy-link", "zen-downloads-ctx-pause", "zen-downloads-ctx-rename", "zen-downloads-ctx-delete-file", "zen-downloads-ctx-delete"]) {
                 const el = document.getElementById(id);
                 if (el) el.replaceWith(el.cloneNode(true));
             }
 
             const openFileItem = document.getElementById("zen-downloads-ctx-open-file");
             openFileItem.hidden = !item.targetPath || item.status === "deleted";
+            openFileItem.setAttribute("label", item.isFolder ? "Open folder" : "Open");
             openFileItem.addEventListener("command", () => {
                 this.handleAction(item, "open");
             });
 
-            document.getElementById("zen-downloads-ctx-open-link").addEventListener("command", () => {
+            const showItem = document.getElementById("zen-downloads-ctx-show");
+            showItem.hidden = !item.targetPath || item.status === "deleted";
+            showItem.addEventListener("command", () => {
+                this.handleAction(item, "show");
+            });
+
+            const copyFileItem = document.getElementById("zen-downloads-ctx-copy-file");
+            copyFileItem.hidden = !item.targetPath || item.status === "deleted" || item.isFolder;
+            copyFileItem.addEventListener("command", () => {
+                this.handleAction(item, "copy-file");
+            });
+
+            const openLinkItem = document.getElementById("zen-downloads-ctx-open-link");
+            openLinkItem.hidden = !item.url || item.scannedFromFolder;
+            openLinkItem.addEventListener("command", () => {
                 this.handleAction(item, "open-link");
+            });
+
+            const copyLinkItem = document.getElementById("zen-downloads-ctx-copy-link");
+            copyLinkItem.hidden = !item.url || item.scannedFromFolder;
+            copyLinkItem.addEventListener("command", () => {
+                this.handleAction(item, "copy-link");
             });
 
             const pauseItem = document.getElementById("zen-downloads-ctx-pause");
@@ -951,7 +1237,9 @@
                 this.handleAction(item, item.status === "paused" ? "resume" : "pause");
             });
 
-            document.getElementById("zen-downloads-ctx-rename").addEventListener("command", () => {
+            const renameItem = document.getElementById("zen-downloads-ctx-rename");
+            renameItem.hidden = !!item.isFolder;
+            renameItem.addEventListener("command", () => {
                 if (!item.targetPath || item.status === "deleted") return;
                 const input = { value: item.filename };
                 const ok = Services.prompt.prompt(window, "Rename File", null, input, null, { value: false });
@@ -984,7 +1272,7 @@
             });
 
             const deleteFileItem = document.getElementById("zen-downloads-ctx-delete-file");
-            deleteFileItem.hidden = !item.targetPath || item.status === "deleted";
+            deleteFileItem.hidden = !item.targetPath || item.status === "deleted" || item.isFolder;
             deleteFileItem.addEventListener("command", async () => {
                 const confirmed = Services.prompt.confirm(
                     window,
@@ -1004,7 +1292,11 @@
                     await IOUtils.remove(item.targetPath);
 
                     try {
-                        const list = await this._historyList();
+                        const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
+                        const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
+                        const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
+                        const isPrivate = PrivateBrowsingUtils.isContentWindowPrivate(window);
+                        const list = await DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
                         await list.remove(item.historyRaw || item.raw);
                     } catch (historyErr) {
                         console.warn("[ZenLibrary Downloads] Deleted file but could not remove history entry:", historyErr);
@@ -1017,9 +1309,15 @@
                 }
             });
 
-            document.getElementById("zen-downloads-ctx-delete").addEventListener("command", async () => {
+            const deleteHistoryItem = document.getElementById("zen-downloads-ctx-delete");
+            deleteHistoryItem.hidden = item.scannedFromFolder || (!item.historyRaw && !item.raw);
+            deleteHistoryItem.addEventListener("command", async () => {
                 try {
-                    const list = await this._historyList();
+                    const { DownloadHistory } = ChromeUtils.importESModule("resource://gre/modules/DownloadHistory.sys.mjs");
+                    const { Downloads } = ChromeUtils.importESModule("resource://gre/modules/Downloads.sys.mjs");
+                    const { PrivateBrowsingUtils } = ChromeUtils.importESModule("resource://gre/modules/PrivateBrowsingUtils.sys.mjs");
+                    const isPrivate = PrivateBrowsingUtils.isContentWindowPrivate(window);
+                    const list = await DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
                     await list.remove(item.historyRaw || item.raw);
                     this.removeDownloadRow(item, itemEl);
                 } catch (err) {
@@ -1027,11 +1325,37 @@
                 }
             });
 
-            popup.openPopupAtScreen(e.screenX, e.screenY, true);
+            itemEl?.toggleAttribute?.("menu-open", true);
+            popup.addEventListener("popuphidden", () => {
+                itemEl?.removeAttribute?.("menu-open");
+            }, { once: true });
+
+            if (anchor) {
+                popup.openPopup(anchor, "after_end", 0, 4, false, false, e);
+            } else {
+                popup.openPopupAtScreen(e.screenX, e.screenY, true);
+            }
         }
 
-        formatBytes(bytes) {
-            return window.ZenLibraryUtil.formatBytes(bytes);
+        formatDisplayUrl(url) {
+            if (!url) return "";
+            try {
+                const parsed = new URL(url);
+                const host = parsed.hostname.replace(/^www\./, "");
+                const path = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname : "";
+                return `${host}${path}`;
+            } catch (e) {
+                return String(url);
+            }
+        }
+
+        formatBytes(bytes, decimals = 2) {
+            if (!+bytes || bytes === 0) return "0 Bytes";
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
         }
 
         formatDuration(seconds) {
@@ -1045,49 +1369,49 @@
             return `${hours}h ${remainingMinutes}m left`;
         }
 
-        // For the DownloadURL drag flavour only; the platform MIME service is not consulted.
-        static MIME_TYPES = {
-            // Images
-            'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
-            'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp',
-            'svg': 'image/svg+xml', 'ico': 'image/x-icon',
-
-            // Documents
-            'pdf': 'application/pdf', 'doc': 'application/msword',
-            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'xls': 'application/vnd.ms-excel',
-            'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'ppt': 'application/vnd.ms-powerpoint',
-            'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-
-            // Text
-            'txt': 'text/plain', 'html': 'text/html', 'css': 'text/css',
-            'js': 'text/javascript', 'json': 'application/json',
-            'xml': 'text/xml', 'csv': 'text/csv',
-
-            // Audio
-            'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg',
-            'flac': 'audio/flac', 'aac': 'audio/aac', 'm4a': 'audio/mp4',
-
-            // Video
-            'mp4': 'video/mp4', 'avi': 'video/x-msvideo', 'mov': 'video/quicktime',
-            'wmv': 'video/x-ms-wmv', 'flv': 'video/x-flv', 'webm': 'video/webm',
-            'mkv': 'video/x-matroska',
-
-            // Archives
-            'zip': 'application/zip', 'rar': 'application/x-rar-compressed',
-            '7z': 'application/x-7z-compressed', 'tar': 'application/x-tar',
-            'gz': 'application/gzip',
-
-            // Executables
-            'exe': 'application/x-msdownload', 'msi': 'application/x-msi',
-            'deb': 'application/x-debian-package', 'rpm': 'application/x-rpm'
-        };
-
         getContentTypeFromFilename(filename) {
             if (!filename) return 'application/octet-stream';
+
             const ext = filename.toLowerCase().split('.').pop();
-            return ZenLibraryDownloads.MIME_TYPES[ext] || 'application/octet-stream';
+            const mimeTypes = {
+                // Images
+                'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+                'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp',
+                'svg': 'image/svg+xml', 'ico': 'image/x-icon',
+
+                // Documents
+                'pdf': 'application/pdf', 'doc': 'application/msword',
+                'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'xls': 'application/vnd.ms-excel',
+                'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'ppt': 'application/vnd.ms-powerpoint',
+                'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+
+                // Text
+                'txt': 'text/plain', 'html': 'text/html', 'css': 'text/css',
+                'js': 'text/javascript', 'json': 'application/json',
+                'xml': 'text/xml', 'csv': 'text/csv',
+
+                // Audio
+                'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg',
+                'flac': 'audio/flac', 'aac': 'audio/aac', 'm4a': 'audio/mp4',
+
+                // Video
+                'mp4': 'video/mp4', 'avi': 'video/x-msvideo', 'mov': 'video/quicktime',
+                'wmv': 'video/x-ms-wmv', 'flv': 'video/x-flv', 'webm': 'video/webm',
+                'mkv': 'video/x-matroska',
+
+                // Archives
+                'zip': 'application/zip', 'rar': 'application/x-rar-compressed',
+                '7z': 'application/x-7z-compressed', 'tar': 'application/x-tar',
+                'gz': 'application/gzip',
+
+                // Executables
+                'exe': 'application/x-msdownload', 'msi': 'application/x-msi',
+                'deb': 'application/x-debian-package', 'rpm': 'application/x-rpm'
+            };
+
+            return mimeTypes[ext] || 'application/octet-stream';
         }
     }
 

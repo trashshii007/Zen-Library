@@ -309,17 +309,19 @@
                     const isEnabled = mgr ? (mgr.getActiveBoostId(domain) === boostId) : (boostId === activeId);
 
                     const row = this.el("div", {
-                        className: `library-list-item zen-library-row library-boost-item${isEnabled ? "" : " boosts-disabled"}`
+                        className: `library-list-item zen-library-row library-boost-item zen-library-boost-row${isEnabled ? "" : " boosts-disabled"}`
                     });
+                    row.toggleAttribute("disabled", !isEnabled);
 
                     // Favicon
-                    const iconContainer = this.el("span", { className: "zen-library-row-icon-wrapper item-icon-container" });
+                    const iconContainer = this.el("span", { className: "zen-library-boost-icon" });
                     // [audit] SEC-3 — `domain` is stored data, and this string is assigned to
                     // cssText, so an unescaped quote in it injected CSS declarations into
                     // privileged chrome rather than merely breaking a favicon.
-                    iconContainer.appendChild(this.el("div", {
-                        className: "item-icon zen-library-row-icon",
-                        style: `background-image: url("${window.ZenLibraryUtil.cssUrl(`page-icon:https://${domain}`)}");`
+                    iconContainer.appendChild(this.el("img", {
+                        className: "zen-library-row-icon",
+                        src: `page-icon:https://${domain}`,
+                        alt: ""
                     }));
                     iconContainer.firstElementChild.toggleAttribute("inactive", !isEnabled);
                     row.appendChild(iconContainer);
@@ -342,13 +344,26 @@
                         mgr.toggleBoostActiveForDomain(domain, boostId);
                         const nowEnabled = mgr.getActiveBoostId(domain) === boostId;
                         row.classList.toggle("boosts-disabled", !nowEnabled);
+                        row.toggleAttribute("disabled", !nowEnabled);
                         iconContainer.firstElementChild.toggleAttribute("inactive", !nowEnabled);
                     });
                     row.appendChild(toggle);
 
                     row.onclick = (e) => {
                         if (e.target.closest(".boosts-toggle")) return;
-                        this.openBoostWithEditor(domain, boost);
+                        if (!mgr) return;
+                        const currentlyEnabled = mgr.getActiveBoostId(domain) === boostId;
+                        if (currentlyEnabled) {
+                            this.openBoostWithEditor(domain, boost);
+                            return;
+                        }
+                        mgr.toggleBoostActiveForDomain(domain, boostId);
+                        row.classList.remove("boosts-disabled");
+                        row.removeAttribute("disabled");
+                        iconContainer.firstElementChild.removeAttribute("inactive");
+                        toggle.setAttribute("checked", "true");
+                        const thumb = toggle.querySelector(".boosts-toggle-thumb");
+                        if (thumb) thumb.style.transform = "translateX(14px)";
                     };
 
                     row.oncontextmenu = (e) => {

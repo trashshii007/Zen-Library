@@ -973,6 +973,7 @@
             this._onUnload = this._onUnload.bind(this);
             this._onWheel = this._onWheel.bind(this);
             this._onMozSwipeGesture = this._onMozSwipeGesture.bind(this);
+            this._onShowAllHistoryCommand = this._onShowAllHistoryCommand.bind(this);
             this._wheelGesture = { totalX: 0, lastTime: 0, mode: null };
             this._mozSwipeGesture = { active: false, mode: null };
             this._initTimer = null;
@@ -1022,6 +1023,7 @@
             // left this window's observers, timers and module state behind. widget:false
             // because the toolbar button belongs to the application, not to this window.
             window.addEventListener("unload", this._onUnload, { once: true });
+            this._watchShowAllHistoryCommand();
 
             // Always (re)written: an older build left this element empty, and a Sine reload keeps it.
             let s = document.getElementById("zen-library-global-style");
@@ -1073,6 +1075,27 @@
 
         _onUnload() {
             this.destroy({ widget: false });
+        }
+
+        _watchShowAllHistoryCommand() {
+            try {
+                const command = document.getElementById("Browser:ShowAllHistory");
+                if (!command || this._showAllHistoryCommand === command) return;
+                if (this._showAllHistoryCommand) {
+                    this._showAllHistoryCommand.removeEventListener("command", this._onShowAllHistoryCommand, true);
+                }
+                this._showAllHistoryCommand = command;
+                command.addEventListener("command", this._onShowAllHistoryCommand, true);
+            } catch (e) {
+                console.error("[ZenLibrary] Failed to watch Show All History command:", e);
+            }
+        }
+
+        _onShowAllHistoryCommand(event) {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation?.();
+            this.openTab("history");
         }
 
         /**
@@ -1998,6 +2021,12 @@
             window.removeEventListener("keydown", this._onKeyDown, true);
             window.removeEventListener("unload", this._onUnload);
             window.removeEventListener("wheel", this._onWheel, true);
+            if (this._showAllHistoryCommand) {
+                try {
+                    this._showAllHistoryCommand.removeEventListener("command", this._onShowAllHistoryCommand, true);
+                } catch (e) { }
+                this._showAllHistoryCommand = null;
+            }
             [
                 "MozSwipeGestureMayStart",
                 "MozSwipeGestureStart",
