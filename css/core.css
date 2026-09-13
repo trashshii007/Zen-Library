@@ -694,39 +694,6 @@
   display: none;
 }
 
-.library-list-item .item-folder-icon {
-  display: none;
-  width: 24px;
-  height: 24px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  cursor: pointer;
-  flex-shrink: 0;
-  opacity: 0.6;
-  margin-right: 0;
-  color: var(--ws-text-color, inherit);
-}
-
-.library-list-item:hover .item-folder-icon {
-  display: flex;
-}
-
-.library-list-item .item-folder-icon:hover {
-  background: rgba(255, 255, 255, 0.1);
-  opacity: 1;
-}
-
-.library-list-item .item-folder-mask {
-  width: 16px;
-  height: 16px;
-  background-color: currentColor;
-  mask-size: contain;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  mask-image: url("data:image/svg+xml,%3Csvg width='24' height='24' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M20 6H12L10 4H4C2.89543 4 2 4.89543 2 6V18C2 19.1046 2.89543 20 4 20H20C21.1046 20 22 19.1046 22 18V8C22 6.89543 21.1046 6 20 6Z' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-}
-
 /* EMPTY STATE */
 .empty-state {
   display: flex;

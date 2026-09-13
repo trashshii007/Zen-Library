@@ -62,7 +62,7 @@ zen-library-item[menu-open] .download-row-actions {
 }
 
 .download-row-action-icon.more-icon {
-    mask-image: url("chrome://browser/skin/zen-icons/more.svg");
+    mask-image: url("chrome://browser/skin/zen-icons/menu.svg");
 }
 
 .download-row-action-icon.retry-icon {
