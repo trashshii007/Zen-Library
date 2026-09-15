@@ -31,12 +31,27 @@
         static MEASURE_TIMEOUT_MS = 200;
         // While the tab is showing, directory mtimes are re-checked this often so a file deleted or added outside the browser follows on screen.
         static WATCH_MS = 4000;
+        // The location chips, in panel order; each id is a scan root's id (see _scanRoots).
+        static LOCATIONS = [["easel", "Easel captures"], ["downloads", "Downloads"], ["screenshots", "Screenshots"], ["user", "User"]];
+        // Semicolon-separated absolute folder paths the user adds in Settings; each is walked like Downloads.
+        static USER_DIRS_PREF = "zen.library.media.user-dirs";
+        static EASEL_STORE_URL = "chrome://sine/content/zen-easel/background/store.sys.mjs";
+        // Zen/Firefox, Windows and macOS all name their captures "Screenshot <date>…"/"Screen Shot …", wherever they save them.
+        static SCREENSHOT_NAME = /^screen ?shot[ _-]/i;
 
         constructor(library) {
             this.library = library;
             this._container = null;
             this._searchTerm = "";
             this._filter = "all"; // all, images, videos, audio
+            this._locations = new Set(); // selected location ids; empty means every location
+            this._filtersOpen = false;
+            this._searchDebounce = null;
+            this._headerEls = null;
+            this._chipEls = [];
+            this._panelObserver = null;
+            // The roots the last walk started from; refreshed per scan so a settings change lands on the next one.
+            this._roots = null;
             this._itemCount = 0;
             this._currentAudio = null;
             this._playingId = null;
@@ -167,7 +182,7 @@
             const target = filtered.slice(0, limit);
             const shown = this._renderedIds;
             const same = shown && target.length === shown.length && target.every((item, i) => item.id === shown[i]);
-            this._setCount(filtered.length);
+            this._setCount(items.length);
             if (!same && !this._patchGrid(target)) {
                 const prevScroll = this._container?.scrollTop || 0;
                 this.renderList(items);
@@ -237,7 +252,7 @@
             return window.ZenLibrarySpaces?.calculateMediaColumns?.(libWidth) || 1;
         }
 
-        // The panel width follows the filtered count (calculateMediaWidth); width only, a full update() would remount the grid.
+        // The panel width follows the unfiltered count (calculateMediaWidth), so a type pill, location chip or search term never resizes the panel; width only, a full update() would remount the grid.
         _setCount(count) {
             this._itemCount = count;
             // While the walk is still running the list can only grow, so the width holds at a full grid rather than stepping up a column at a time.
@@ -278,6 +293,148 @@
 
         get el() { return this.library.el.bind(this.library); }
 
+        // Built once per section render, like History's: the search pill and the location panel share one grid cell and swap in place; the type pill bar sits below both.
+        renderHeaderControls() {
+            const top = this.el("div", { className: "zen-library-search-top" });
+
+            const searchInput = this.el("input", {
+                type: "search",
+                placeholder: "Search Media…",
+                value: this._searchTerm,
+                oninput: (event) => this._onSearchInput(event)
+            });
+
+            const searchHeader = this.el("div", { className: "zen-library-search-header" }, [
+                this.el("div", { className: "zen-library-search-box" }, [
+                    this.el("img", {
+                        src: "chrome://browser/skin/zen-icons/search-glass.svg",
+                        alt: ""
+                    }),
+                    searchInput
+                ]),
+                this.el("button", {
+                    className: "zen-library-filter-button",
+                    onclick: (event) => {
+                        event.preventDefault();
+                        this._setFiltersOpen(true);
+                    }
+                }, [
+                    this.el("img", {
+                        src: "chrome://browser/skin/zen-icons/sliders.svg",
+                        alt: ""
+                    }),
+                    this.el("span", { textContent: "Filter" })
+                ])
+            ]);
+
+            const filterHeader = this.el("div", { className: "zen-library-filter-header" }, [
+                this.el("h2", { textContent: "Filter Media…" }),
+                this.el("button", {
+                    className: "zen-library-filter-done",
+                    textContent: "Done",
+                    onclick: (event) => {
+                        event.preventDefault();
+                        this._setFiltersOpen(false);
+                    }
+                })
+            ]);
+
+            this._chipEls = [];
+            const panelInner = this.el("div", { className: "zen-library-filter-panel-inner" }, [
+                this.el("div", { className: "zen-library-filter-group" }, [
+                    this.el("h3", { textContent: "Where is it from?" }),
+                    this.el("div", { className: "zen-library-filter-options" },
+                        ZenLibraryMedia.LOCATIONS.map(([id, label]) => this._renderLocationChip(id, label))
+                    )
+                ]),
+                this.el("div", { className: "zen-library-filter-divider" })
+            ]);
+
+            top.appendChild(searchHeader);
+            top.appendChild(filterHeader);
+            top.appendChild(this.el("div", { className: "zen-library-filter-panel" }, [panelInner]));
+
+            this._headerEls = { top, searchHeader, filterHeader, panelInner };
+            this._syncChips();
+            this._applyFiltersOpen();
+
+            const fragment = document.createDocumentFragment();
+            fragment.appendChild(top);
+            fragment.appendChild(this.renderFilterBar());
+            return fragment;
+        }
+
+        _renderLocationChip(id, label) {
+            const chip = this.el("button", {
+                className: "zen-library-filter-chip",
+                onclick: (event) => {
+                    event.preventDefault();
+                    this._toggleLocation(id);
+                }
+            }, [this.el("span", { textContent: label })]);
+            this._chipEls.push({ chip, id });
+            return chip;
+        }
+
+        _syncChips() {
+            for (const { chip, id } of this._chipEls) chip.toggleAttribute("active", this._locations.has(id));
+        }
+
+        _toggleLocation(id) {
+            if (this._locations.has(id)) this._locations.delete(id);
+            else this._locations.add(id);
+            this._syncChips();
+            this._applyFilters();
+        }
+
+        _setFiltersOpen(open) {
+            this._filtersOpen = open;
+            this._applyFiltersOpen();
+        }
+
+        _applyFiltersOpen() {
+            const els = this._headerEls;
+            if (!els) return;
+            const open = this._filtersOpen;
+            els.top.toggleAttribute("open", open);
+            els.searchHeader.toggleAttribute("inert", open);
+            els.filterHeader.toggleAttribute("inert", !open);
+            els.panelInner.toggleAttribute("inert", !open);
+            // The shifted grid and pill bar read the var from the host. Unlike History's, this panel's width follows the card count, so the chips can wrap after opening: the height is observed, not measured once.
+            const host = this.library;
+            this._panelObserver?.disconnect();
+            this._panelObserver = null;
+            if (!open) {
+                host.style?.setProperty("--zen-library-filter-height", "0px");
+                return;
+            }
+            this._panelObserver = new ResizeObserver(() => {
+                if (this._headerEls !== els || !this._filtersOpen) return;
+                host.style?.setProperty("--zen-library-filter-height", `${els.panelInner.scrollHeight + 8}px`);
+            });
+            this._panelObserver.observe(els.panelInner);
+        }
+
+        // Leaving the tab collapses the panel, so returning never lands on a stale open state.
+        resetControls() {
+            this._setFiltersOpen(false);
+        }
+
+        // The term is stored on every keystroke so the field never lags; only the re-render waits.
+        _onSearchInput(event) {
+            this._searchTerm = event.target.value;
+            if (!this._searchDebounce) this._searchDebounce = window.ZenLibraryUtil.debounce(() => this._applyFilters(), 300);
+            this._searchDebounce();
+        }
+
+        // Search, location and type are pure filters over the last list: no entrance fade, and paging starts over. Mid-scan the seeded list is what is on screen and the walk's own paint applies the filters when it lands; before any paint there is nothing to filter yet.
+        _applyFilters() {
+            this._stopCurrentAudio();
+            this._visibleLimit = ZenLibraryMedia.INITIAL_RENDER_LIMIT;
+            const list = this._scanCache || this._listSource;
+            if (list) this.renderList(list);
+        }
+
         renderFilterBar() {
             const filterBar = this.el("div", { className: "media-filter-bar" });
             const filters = [
@@ -295,23 +452,9 @@
                     onclick: () => {
                         if (this._filter === f.id) return;
                         this._filter = f.id;
-                        this._visibleLimit = ZenLibraryMedia.INITIAL_RENDER_LIMIT;
                         filterBar.querySelectorAll(".media-filter-pill").forEach(p => p.classList.remove("active"));
                         pill.classList.add("active");
-                        this._stopCurrentAudio(); // STOP ON FILTER CHANGE
-                        // No entrance fade: a filter swap is an in-place re-render, same as search.
-                        const container = this._container;
-                        const token = ++this._renderToken;
-                        if (this._scanCache) {
-                            this.renderList(this._scanCache);
-                            return;
-                        }
-                        // Mid-scan: filter what is on screen now, and take the walk's result when it lands (the token bump above retired render()'s own paint).
-                        if (this._listSource) this.renderList(this._listSource);
-                        this.fetchDownloads().then(downloads => {
-                            if (!this._canRender(token, container)) return;
-                            this._renderIfChanged(downloads);
-                        });
+                        this._applyFilters();
                     }
                 }, [
                     this.el("div", { className: `icon-mask ${f.iconClass}` })
@@ -602,11 +745,12 @@
             return String(path || "").replaceAll("\\", "/").toLowerCase();
         }
 
-        // The item for a path the caller has already stat'ed as a file, or null when it is not media; the walk and the seed build identical items so a path found by both is the same card.
+        // The item for a path the caller has already stat'ed as a file, or null when it is not media or under no root; the walk and the seed build identical items so a path found by both is the same card.
         _mediaItem(path, info) {
             const name = PathUtils.filename(path);
             const contentType = this._mediaContentType(name);
-            if (!contentType) return null;
+            const root = contentType ? this._rootFor(path) : null;
+            if (!root) return null;
 
             // nsIFile is what the drag path and the cover reader want; built from a path already known to be a file, so no blocking probes.
             let file;
@@ -618,6 +762,8 @@
             }
 
             const modified = info.lastModified || 0;
+            // One location per file: Zen saves its own screenshots into Downloads, and those belong to the Screenshots chip, not Downloads.
+            const source = root.id === "downloads" && ZenLibraryMedia.SCREENSHOT_NAME.test(name) ? "screenshots" : root.id;
             // No Gecko File here: the drag carries the nsIFile via mozSetDataAt, and the card's pointerdown warms the fallback File on demand.
             return {
                 id: `local_${path}_${modified}`,
@@ -628,6 +774,7 @@
                 contentType,
                 timestamp: modified,
                 targetPath: path,
+                source,
                 file,
                 raw: { target: { path }, lastModified: modified }
             };
@@ -641,27 +788,30 @@
             return DownloadHistory.getList({ type: isPrivate ? Downloads.ALL : Downloads.PUBLIC });
         }
 
-        // True when the walk would list this path: a media file under the root, within its depth, no dotfile segment. Download paths are untrusted strings, so nothing else parses them.
-        _walkWouldList(path) {
-            if (typeof path !== "string") return false;
-            const root = this._downloadsRootPath();
-            if (!root) return false;
-            const rootKey = this._pathKey(root).replace(/\/+$/, "") + "/";
+        // The root the walk would list this path under, or null: a media file within SCAN_DEPTH of a root, no dotfile segment. The deepest root wins, so a user folder inside Downloads tags its files as the user's. Download paths are untrusted strings, so nothing else parses them.
+        _rootFor(path) {
+            if (typeof path !== "string") return null;
             const key = this._pathKey(path);
-            if (!key.startsWith(rootKey)) return false;
-            const parts = key.slice(rootKey.length).split("/");
-            if (parts.length - 1 > ZenLibraryMedia.SCAN_DEPTH || parts.some(p => !p || p.startsWith("."))) return false;
-            return !!this._mediaContentType(parts[parts.length - 1]);
+            let best = null;
+            for (const root of this._roots || (this._roots = this._scanRoots())) {
+                const rootKey = this._pathKey(root.path).replace(/\/+$/, "") + "/";
+                if (!key.startsWith(rootKey)) continue;
+                if (!best || rootKey.length > best.rootKey.length) best = { root, rootKey };
+            }
+            if (!best) return null;
+            const parts = key.slice(best.rootKey.length).split("/");
+            if (parts.length - 1 > ZenLibraryMedia.SCAN_DEPTH || parts.some(p => !p || p.startsWith("."))) return null;
+            return this._mediaContentType(parts[parts.length - 1]) ? best.root : null;
         }
 
         // Download history is one Places read, so the newest files can paint before the folder walk finishes. Only rows the walk would also find are used, so the section shows the same files either way — just sooner.
         async fetchRecentHistoryMedia(limit = ZenLibraryMedia.HISTORY_SEED_LIMIT) {
-            if (!this._downloadsRootPath()) return [];
+            if (!(this._roots = this._scanRoots()).length) return [];
             const when = (d) => Number(d.endTime || d.startTime || 0);
 
             try {
                 const list = await this._historyList();
-                const rows = (await list.getAll()).filter(d => this._walkWouldList(d?.target?.path)).sort((a, b) => when(b) - when(a));
+                const rows = (await list.getAll()).filter(d => this._rootFor(d?.target?.path)).sort((a, b) => when(b) - when(a));
 
                 // Re-downloads of one path are one file; dedupe before taking the limit so they do not eat into it.
                 const seen = new Set();
@@ -694,38 +844,71 @@
             }
         }
 
-        // Memoised: it is the OS Downloads folder, and _walkWouldList asks per history row.
+        _dirPath(key, ...append) {
+            try {
+                const dir = Services.dirsvc.get(key, Ci.nsIFile);
+                for (const name of append) dir.append(name);
+                return dir.path;
+            } catch (e) { return ""; }
+        }
+
+        // Memoised: it is the OS Downloads folder, and _rootFor asks per history row.
         _downloadsRootPath() {
             if (this._rootPath !== undefined) return this._rootPath;
-            const getDir = (key) => {
-                try {
-                    return Services.dirsvc.get(key, Ci.nsIFile);
-                } catch (e) { return null; }
-            };
-
-            let downloadsDir = getDir("Dwnld"); // OS Downloads
-            if (!downloadsDir) {
-                const home = getDir("Home");
-                if (home) {
-                    downloadsDir = home.clone();
-                    downloadsDir.append("Downloads");
-                }
-            }
-            if (!downloadsDir) console.error("ZenLibrary: Could not find Downloads directory");
-            this._rootPath = downloadsDir ? downloadsDir.path : "";
+            this._rootPath = this._dirPath("Dwnld") || this._dirPath("Home", "Downloads");
+            if (!this._rootPath) console.error("ZenLibrary: Could not find Downloads directory");
             return this._rootPath;
         }
 
-        async _scan(onProgress = null, seedPromise = null) {
-            const root = this._downloadsRootPath();
-            if (!root) return [];
-            const dirMtimes = new Map();
+        // Memoised like Downloads (the watch tick asks every WATCH_MS): easel captures live in the store's assets/ tree; the store is read only if the easel mod is installed.
+        _easelAssetsPath() {
+            if (this._easelPath !== undefined) return this._easelPath;
             try {
-                dirMtimes.set(this._pathKey(root), { path: root, mtime: (await IOUtils.stat(root)).lastModified || 0 });
-            } catch (e) {
-                console.error("ZenLibrary: Downloads directory does not exist:", root);
-                return [];
+                this._easelPath = PathUtils.join(ChromeUtils.importESModule(ZenLibraryMedia.EASEL_STORE_URL).EaselStore.root, "assets");
+            } catch (e) { this._easelPath = ""; }
+            return this._easelPath;
+        }
+
+        // Memoised; the OS Pictures folder goes by a different key per platform, and Windows and Linux capture tools save into its Screenshots subfolder.
+        _screenshotsPath() {
+            if (this._screenshotsDir !== undefined) return this._screenshotsDir;
+            const pictures = this._dirPath("Pics") || this._dirPath("Pct") || this._dirPath("XDGPict") || this._dirPath("Home", "Pictures");
+            this._screenshotsDir = pictures ? PathUtils.join(pictures, "Screenshots") : "";
+            return this._screenshotsDir;
+        }
+
+        _userDirs() {
+            let raw = "";
+            try { raw = Services.prefs.getStringPref(ZenLibraryMedia.USER_DIRS_PREF, ""); } catch (e) { }
+            // Trailing separators are dropped (a drive root like D:\ keeps its one) so "…\Downloads\" and the Downloads root are one root.
+            return raw.split(/[;\n]/).map(p => p.trim().replace(/(?<=[^\\/:])[\\/]+$/, "")).filter(p => p && PathUtils.isAbsolute(p));
+        }
+
+        // Every directory a walk starts from, as { id, path }; ids are the location chips. Folders that do not exist are skipped by the walk, not here.
+        _scanRoots() {
+            const roots = [];
+            const add = (id, path) => {
+                if (path && !roots.some(r => this._pathKey(r.path) === this._pathKey(path))) roots.push({ id, path });
+            };
+            add("downloads", this._downloadsRootPath());
+            add("easel", this._easelAssetsPath());
+            add("screenshots", this._screenshotsPath());
+            for (const path of this._userDirs()) add("user", path);
+            return roots;
+        }
+
+        async _scan(onProgress = null, seedPromise = null) {
+            const roots = this._roots = this._scanRoots();
+            const dirMtimes = new Map();
+            for (const root of roots) {
+                try {
+                    dirMtimes.set(this._pathKey(root.path), { path: root.path, mtime: (await IOUtils.stat(root.path)).lastModified || 0 });
+                } catch (e) {
+                    // Only Downloads is expected to exist; the other roots are optional folders.
+                    if (root.id === "downloads") console.error("ZenLibrary: Downloads directory does not exist:", root.path);
+                }
             }
+            if (!dirMtimes.size) return [];
 
             // The seed and the walk reach the same files by different routes; the path key decides who got there first.
             const mediaFiles = [];
@@ -767,7 +950,8 @@
                         }
 
                         if (info.type === "directory") {
-                            next.push({ path, mtime: info.lastModified || 0 });
+                            // A root nested in another (a user folder inside Downloads, Pictures over Screenshots) is already queued at level 0; walking it again from here would list its subtree twice.
+                            if (!dirMtimes.has(this._pathKey(path))) next.push({ path, mtime: info.lastModified || 0 });
                             return null;
                         }
                         return this._mediaItem(path, info);
@@ -793,10 +977,12 @@
             return mediaFiles.sort((a, b) => b.timestamp - a.timestamp);
         }
 
-        // One stat per directory the last walk listed: cheap next to the walk's stat per file, and enough to tell whether it needs repeating.
+        // One stat per directory the last walk listed: cheap next to the walk's stat per file, and enough to tell whether it needs repeating. A root added or removed in Settings since that walk counts too.
         async _dirsChanged() {
             const dirs = [...this._dirMtimes.values()];
             if (!dirs.length) return true;
+            const rootKeys = (roots) => (roots || []).map(r => this._pathKey(r.path)).sort().join("\n");
+            if (rootKeys(this._scanRoots()) !== rootKeys(this._roots)) return true;
             for (let i = 0; i < dirs.length; i += ZenLibraryMedia.SCAN_BATCH_SIZE) {
                 const changed = await Promise.all(dirs.slice(i, i + ZenLibraryMedia.SCAN_BATCH_SIZE).map(async (dir) => {
                     try {
@@ -859,7 +1045,7 @@
 
         async _onDownloadChanged(download) {
             const path = download?.target?.path;
-            if (!this._scanCache || !this._walkWouldList(path)) return;
+            if (!this._scanCache || !this._rootFor(path)) return;
             const key = this._pathKey(path);
             const known = this._scanCache.find(item => this._pathKey(item.targetPath) === key);
             if (download.deleted) {
@@ -889,12 +1075,13 @@
             if (token === this._renderToken && this._container?.isConnected) this._renderIfChanged(this._scanCache);
         }
 
-        // The current filter pill and search term applied to a list; order is preserved.
+        // The current type pill, location chips and search term applied to a list; order is preserved.
         _filterItems(downloads) {
             const { IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS } = ZenLibraryMedia;
             const term = this._searchTerm.toLowerCase();
 
             return downloads.filter(d => {
+                if (this._locations.size && !this._locations.has(d.source)) return false;
                 const ext = d.filename.split('.').pop().toLowerCase();
                 const contentType = (d.contentType || "").toLowerCase();
 
@@ -924,7 +1111,7 @@
             this._listSource = downloads;
 
             const mediaItems = this._filterItems(downloads);
-            this._setCount(mediaItems.length);
+            this._setCount(downloads.length);
 
             if (mediaItems.length === 0) {
                 this._renderedIds = [];
@@ -936,8 +1123,15 @@
                 iconContainer.innerHTML = iconSvg;
 
                 emptyState.appendChild(iconContainer.firstElementChild);
-                emptyState.appendChild(this.el("h3", { textContent: this._searchTerm ? "No matching media" : "No media found" }));
-                emptyState.appendChild(this.el("p", { textContent: this._searchTerm ? "Try a different search term." : `We couldn't find any ${this._filter !== 'all' ? this._filter : 'images, videos, or audio files'} in your downloads.` }));
+                const kind = this._filter !== "all" ? this._filter : "images, videos, or audio files";
+                const where = ZenLibraryMedia.LOCATIONS.filter(([id]) => this._locations.has(id)).map(([, label]) => label).join(", ");
+                let hint;
+                if (this._searchTerm) hint = "Try a different search term.";
+                else if (this._locations.has("user") && !this._userDirs().length) hint = "Add your own folders under Settings → Sine Mods → Zen Library.";
+                else if (where) hint = `We couldn't find any ${kind} from ${where}.`;
+                else hint = `We couldn't find any ${kind} in your media locations.`;
+                emptyState.appendChild(this.el("h3", { textContent: this._searchTerm || where ? "No matching media" : "No media found" }));
+                emptyState.appendChild(this.el("p", { textContent: hint }));
 
                 this._container.appendChild(emptyState);
                 return;
@@ -1785,6 +1979,13 @@
             this._cancelProgress();
             clearInterval(this._watchTimer);
             this._watchTimer = 0;
+            this._searchDebounce?.cancel();
+            this._searchDebounce = null;
+            this._panelObserver?.disconnect();
+            this._panelObserver = null;
+            this._headerEls = null;
+            this._chipEls = [];
+            this._roots = null;
             this._clearCoverJobs();
             this._disconnectLazyObservers();
             try { if (this._downloadsView) this._downloadsList?.removeView(this._downloadsView); } catch (e) { }

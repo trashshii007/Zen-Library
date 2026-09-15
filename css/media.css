@@ -9,6 +9,12 @@
     flex-shrink: 0;
     background: var(--zen-toolbar-element-bg);
     border-radius: var(--border-radius-medium);
+    transition: transform 0.3s ease;
+}
+
+/* The bar sits between the search pill and the grid, so it moves down with the grid while the location panel is open (core.css shifts .library-content the same way). */
+.library-header:has(.zen-library-search-top[open]) .media-filter-bar {
+    transform: translateY(var(--zen-library-filter-height, 0px));
 }
 
 .media-filter-pill {

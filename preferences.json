@@ -93,6 +93,30 @@
   },
   {
     "type": "separator",
+    "label": "Media",
+    "margin": "20px 0 10px 0"
+  },
+  {
+    "type": "text",
+    "label": "The Media section gathers images, videos and audio from your Downloads folder, Zen Easel's captures, and your Pictures ▸ Screenshots folder; its Filter button narrows the grid to any of those locations. Add your own folders below to have them scanned too (they appear under the User location).",
+    "size": "12px",
+    "margin": "0 0 8px 0"
+  },
+  {
+    "type": "string",
+    "property": "zen.library.media.user-dirs",
+    "label": "Extra folders to scan (separate with ;)",
+    "defaultValue": "",
+    "placeholder": "C:\\Users\\you\\Pictures;D:\\Media"
+  },
+  {
+    "type": "text",
+    "label": "Absolute paths only, each scanned up to three folders deep like Downloads. Hidden files and folders are skipped. Applies the next time the Media section opens.",
+    "size": "12px",
+    "margin": "0 0 8px 0"
+  },
+  {
+    "type": "separator",
     "label": "Animation",
     "margin": "20px 0 10px 0"
   },

@@ -262,11 +262,9 @@
             if (this.media && typeof this.media._stopCurrentAudio === "function") {
                 this.media._stopCurrentAudio();
             }
-            // Leaving History collapses its filter panel, so returning never
-            // lands on a stale open filter state.
-            if (this._activeTab === "history") {
-                this.history?.resetControls?.();
-            }
+            // Leaving a section collapses its filter panel (History, Media), so
+            // returning never lands on a stale open filter state.
+            this[this._activeTab]?.resetControls?.();
             this._activeTab = val;
             if (window.gZenLibrary) {
                 window.gZenLibrary.lastActiveTab = val;
@@ -625,8 +623,9 @@
 
                         item.onclick = () => {
                             if (this.activeTab === id) {
-                                // resetView also collapses the filter panel (resetControls).
+                                // History's resetView also collapses its filter panel (resetControls).
                                 if (id === "history") this.history?.resetView?.();
+                                else this[id]?.resetControls?.();
                                 this.update(true);
                             }
                             else this.activeTab = id;
@@ -807,14 +806,14 @@
 
                         const module = this[this.activeTab];
                         if (module && typeof module.renderHeaderControls === "function") {
-                            // History: owns its search field, filter panel and debounce.
+                            // History and Media: own their search field, filter panel and debounce.
                             header.appendChild(module.renderHeaderControls());
                         } else {
                             // [audit] PERF-1 — the results pass is debounced. It used to run on
-                            // every keystroke, and for Downloads and Media that meant a full
-                            // recursive filesystem walk per character typed. The search *term*
-                            // is still recorded synchronously so the field never feels laggy;
-                            // only the re-render is deferred.
+                            // every keystroke, and for Downloads that meant a full recursive
+                            // filesystem walk per character typed. The search *term* is still
+                            // recorded synchronously so the field never feels laggy; only the
+                            // re-render is deferred.
                             this._searchDebounce = window.ZenLibraryUtil.debounce(() => {
                                 const tab = this.activeTab;
                                 if (tab === "downloads" && this.downloads) {
@@ -825,17 +824,6 @@
                                         this.downloads.renderList(this.downloads._cachedDownloads);
                                     } else {
                                         this.downloads.fetchDownloads().then(d => this.downloads.renderList(d));
-                                    }
-                                } else if (tab === "media" && this.media) {
-                                    // Search is a pure filter over the scanned list, so use
-                                    // whatever the last scan produced regardless of its age
-                                    // rather than re-walking Downloads mid-typing. Mid-scan
-                                    // that is the seeded list; the walk's paint applies the term.
-                                    const list = this.media._scanCache || this.media._listSource;
-                                    if (list) {
-                                        this.media.renderList(list);
-                                    } else {
-                                        this.media.fetchDownloads().then(d => this.media.renderList(d));
                                     }
                                 } else if (tab === "boosts" && this.boosts) {
                                     this.boosts.renderList();
@@ -857,9 +845,6 @@
                                 value: val,
                                 oninput: (e) => {
                                     const v = e.target.value;
-                                    if (this.media && typeof this.media._stopCurrentAudio === "function") {
-                                        this.media._stopCurrentAudio();
-                                    }
                                     const module = this[this.activeTab];
                                     if (module) module._searchTerm = v;
                                     // A new search is a new list, so paging starts over. Without
@@ -867,9 +852,6 @@
                                     // previous search had been scrolled.
                                     if (this.activeTab === "downloads" && this.downloads) {
                                         this.downloads._visibleLimit = window.ZenLibraryDownloads?.INITIAL_RENDER_LIMIT || 50;
-                                    }
-                                    if (this.activeTab === "media" && this.media) {
-                                        this.media._visibleLimit = window.ZenLibraryMedia?.INITIAL_RENDER_LIMIT || 36;
                                     }
                                     this._searchDebounce();
                                 }

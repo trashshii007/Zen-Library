@@ -34,6 +34,11 @@
 :root:has(.zen-glance-overlay) #browser {
   overflow: visible !important;
 }
+/* Centered over the whole window, the glance overlaps the panel; the panel is z-index 9 in #browser and Zen's wrapper 1, so lift the wrapper for the glance's lifetime or the dimmed panel paints over the glance and takes its clicks. */
+:root[zen-library-open]:has(.zen-glance-overlay) #zen-appcontent-wrapper,
+:root[zen-library-open-compact]:has(.zen-glance-overlay) #zen-appcontent-wrapper {
+  z-index: 10 !important;
+}
 zen-library,
 #zen-library-container {
   opacity: 1;
