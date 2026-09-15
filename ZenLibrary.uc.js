@@ -729,7 +729,8 @@
                 const ws = window.ZenLibrarySpaces.getWorkspaces();
                 targetWidth = window.ZenLibrarySpaces.calculatePanelWidth(ws.length);
             } else if (this.activeTab === "media") {
-                const count = window.gZenLibraryMediaCount ?? 0;
+                // Unknown before Media's first render in this window: assume a full grid, so a cold open lands at its width instead of tweening 516px → full under the cards.
+                const count = window.gZenLibraryMediaCount ?? Infinity;
                 if (window.ZenLibrarySpaces?.calculateMediaWidth) targetWidth = window.ZenLibrarySpaces.calculateMediaWidth(count);
             } else if (this.activeTab === "easels") {
                 // The fluid two-column grid is exact at 84 sidebar + 36 side padding + 320 cards + 18 gap.
@@ -828,9 +829,11 @@
                                 } else if (tab === "media" && this.media) {
                                     // Search is a pure filter over the scanned list, so use
                                     // whatever the last scan produced regardless of its age
-                                    // rather than re-walking Downloads mid-typing.
-                                    if (this.media._scanCache) {
-                                        this.media.renderList(this.media._scanCache);
+                                    // rather than re-walking Downloads mid-typing. Mid-scan
+                                    // that is the seeded list; the walk's paint applies the term.
+                                    const list = this.media._scanCache || this.media._listSource;
+                                    if (list) {
+                                        this.media.renderList(list);
                                     } else {
                                         this.media.fetchDownloads().then(d => this.media.renderList(d));
                                     }
@@ -1733,14 +1736,8 @@
                 (isMac && e.metaKey && e.shiftKey)
             );
 
-            // [audit] COMPAT-2 — checked before the target guards below, not after. Those
-            // guards exist for Ctrl+H and Ctrl+J, which are Firefox's own shortcuts and are
-            // widely bound by web apps; this chord is the mod's own and is neither
-            // text-producing nor plausibly wanted by a page. Sitting below the guards, it
-            // was unreachable in the one case that matters most: with focus inside a web
-            // page the event's target in this window is the <browser> element, so
-            // `name === "browser" && !this._isOpen` returned first and the shortcut did
-            // nothing unless focus happened to be in chrome UI.
+            // [audit] COMPAT-2 — checked before the editable-target guard below: this chord
+            // is the mod's own and is neither text-producing nor plausibly wanted by a page.
             if (isToggle) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -1752,12 +1749,7 @@
             const name = target && target.localName ? target.localName.toLowerCase() : "";
             if (name === "input" || name === "textarea" || (target && target.isContentEditable)) return;
 
-            // [audit] COMPAT-1 — Ctrl+H and Ctrl+J are Firefox's own Library and Downloads
-            // shortcuts and are also bound by plenty of web apps. Taking them over is a
-            // reasonable default for this mod, but it was unconditional and had no off
-            // switch. Both are now preferences, so a user who wants the native panels — or
-            // wants a web app to receive the key — can have them back without editing
-            // JavaScript. Defaults are unchanged, so existing behaviour is preserved.
+            // [audit] COMPAT-1 — Ctrl+H / Ctrl+J are Firefox's own and common in web apps, so each is a pref; with it on the chord is taken wherever focus is (a page's target here is the <browser>).
             const prefBool = (name, fallback) => {
                 try { return Services.prefs.getBoolPref(name, fallback); } catch (e) { return fallback; }
             };
@@ -1765,8 +1757,7 @@
             const isHistoryShortcut = e.code === "KeyH" && (isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey;
             if (isHistoryShortcut && prefBool("zen.library.shortcut.history", true)) {
                 e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation?.();
+                e.stopImmediatePropagation();
                 this.openTab("history");
                 return;
             }
@@ -1774,15 +1765,12 @@
             const isDownloadsShortcut = e.code === "KeyJ" && (isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey;
             if (isDownloadsShortcut && prefBool("zen.library.shortcut.downloads", true)) {
                 e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation?.();
+                e.stopImmediatePropagation();
                 this.openTab("downloads");
                 return;
             }
 
-            // Keep ordinary page shortcuts alone after the Library-owned chords above.
-            if (name === "browser" && !this._isOpen) return;
-
+            // Everything below is panel navigation; a page keeps its keys while the panel is shut.
             if (!this._isOpen || !this._element) return;
 
             // Allow closing with Escape

@@ -51,7 +51,12 @@
     opacity: 1;
 }
 
+/* Out of flow at the bottom of the masonry: as a flex item it took a column gap (narrowing the grid whenever it existed) and sat at the top, where it intersected at once. */
 .media-load-more-sentinel {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
     height: 1px;
     opacity: 0;
     pointer-events: none;
@@ -195,6 +200,8 @@
     align-items: flex-start;
     gap: 16px;
     width: 100%;
+    /* Anchors the load-more sentinel to the bottom of the tallest column. */
+    position: relative;
 }
 
 .media-masonry-column {
@@ -221,6 +228,11 @@
     margin-bottom: 0;
     transform: translateZ(0);
     transition: background-color 0.2s ease;
+}
+
+/* Cards the background scan adds to a grid already on screen; the class is dropped on animationend. */
+.media-card.pop-in {
+    animation: popInItem 0.3s var(--zen-library-easing) both;
 }
 
 .media-card:active {
