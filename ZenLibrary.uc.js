@@ -8,9 +8,7 @@
 
     const _ucScriptPath = Components.stack.filename;
 
-    // The one list of sections. Adding one means a new entry here, its sidebar icon below,
-    // an `update()` dispatch branch, an `applyTargetWidth` case if it sizes itself, and a
-    // theme.json script entry.
+    // Built-ins live here; add-on sections register through window.ZenLibrarySections below.
     const SECTIONS = {
         downloads: { global: "ZenLibraryDownloads", script: "features/Downloads.uc.js" },
         history:   { global: "ZenLibraryHistory",   script: "features/History.uc.js" },
@@ -19,8 +17,51 @@
         boosts:    { global: "ZenLibraryBoosts",    script: "features/Boosts.uc.js" },
         easels:    { global: "ZenLibraryEasels",    script: "features/Easels.uc.js" }
     };
-    const SECTION_IDS = Object.keys(SECTIONS);
+    const BUILTIN_SECTION_ORDER = ["media", "downloads", "easels", "spaces", "boosts", "history"];
+    const getSectionIds = () => Object.keys(SECTIONS);
+    const getVisibleSectionIds = () => getSectionIds().filter(id => !SECTIONS[id]?.hidden);
+    const isSectionRegistered = id => !!SECTIONS[id];
     const DEFAULT_TAB = "downloads";
+
+    const refreshLibrarySections = (id) => {
+        const controller = window.gZenLibrary;
+        if (controller?._modules && !(id in controller._modules)) controller._modules[id] = null;
+        const el = controller?._element;
+        if (el) {
+            el._rebuildSidebar?.();
+            el._syncSectionStyles?.();
+            if (id && el.activeTab === id) el._adoptModule(id);
+            el.update?.(true);
+        }
+    };
+
+    window.ZenLibrarySections = {
+        register(id, definition = {}) {
+            if (!id || typeof id !== "string") throw new Error("ZenLibrarySections.register requires a string id");
+            SECTIONS[id] = { ...definition };
+            if (definition.global && definition.script) _loadFeatureIfMissing(definition.global, definition.script);
+            refreshLibrarySections(id);
+            return () => this.unregister(id);
+        },
+        unregister(id) {
+            if (!SECTIONS[id] || BUILTIN_SECTION_ORDER.includes(id)) return;
+            delete SECTIONS[id];
+            const controller = window.gZenLibrary;
+            if (controller?._modules) delete controller._modules[id];
+            if (controller?.lastActiveTab === id) controller.lastActiveTab = DEFAULT_TAB;
+            refreshLibrarySections();
+        },
+        has(id) {
+            return isSectionRegistered(id);
+        },
+        get(id) {
+            return SECTIONS[id] ? { ...SECTIONS[id] } : null;
+        },
+        list() {
+            return getSectionIds().map(id => ({ id, ...SECTIONS[id] }));
+        }
+    };
+    try { window.dispatchEvent(new CustomEvent("ZenLibrarySectionsReady")); } catch (e) { }
 
     // Load feature modules that may not have been loaded yet
     const _loadFeatureIfMissing = (windowProp, relPath) => {
@@ -234,7 +275,7 @@
             });
 
             this._sidebarItemEls = {};
-            for (const id of SECTION_IDS) this._adoptModule(id);
+            for (const id of getSectionIds()) this._adoptModule(id);
         }
 
         // One instance per section per window. The controller's persistent copy (created 2 s
@@ -282,6 +323,7 @@
                     link.rel = "stylesheet";
                     link.href = _ucScriptPath.replace(/\.uc\.js(\?.*)?$/i, ".css");
                     this.shadowRoot.appendChild(link);
+                    this._sectionStyleLinks = new Map();
 
                     // [audit] LEAK-3 — this used to be an anonymous closure handed to the
                     // deprecated MediaQueryList.addListener() and never taken off again. A
@@ -320,16 +362,124 @@
 
                     const sidebarItemsContainer = document.createElement("div");
                     sidebarItemsContainer.className = "sidebar-items";
-                    // Display order, not SECTION_IDS order.
-                    const sidebarItems = ["media", "downloads", "easels", "spaces", "boosts", "history"];
                     const parser = new DOMParser();
 
-                    sidebarItems.forEach(id => {
+                    this._sidebarItemsContainer = sidebarItemsContainer;
+                    this._sidebarIconParser = parser;
+                    this._rebuildSidebar();
+                    sidebar.appendChild(sidebarItemsContainer);
+
+                    const footer = document.createElement("div");
+                    footer.className = "sidebar-button-footer";
+
+                    // Native toolbarbuttons like Zen's sidebar action buttons
+                    // (#zen-expand-sidebar-button): list-style-image + context-fill,
+                    // themed by --toolbarbutton-icon-fill. The image URL lives in CSS
+                    // so it matches how Zen declares every other toolbar icon.
+                    const makeFooterButton = (title, command) => {
+                        const btn = document.createXULElement("toolbarbutton");
+                        btn.className = "toolbarbutton-1 chromeclass-toolbar-additional zen-sidebar-action-button sidebar-footer-button";
+                        // XUL tooltips read tooltiptext, not title.
+                        btn.setAttribute("tooltiptext", title);
+                        btn.setAttribute("aria-label", title);
+                        btn.addEventListener("command", command);
+                        return btn;
+                    };
+
+                    const exitBtn = makeFooterButton("Exit Library", () => window.gZenLibrary.close());
+                    exitBtn.classList.add("sidebar-button-exit");
+                    exitBtn.dataset.id = "exit";
+
+                    const donateBtn = makeFooterButton("Donate to Zen", () => {
+                        window.openTrustedLinkIn("https://www.zen-browser.app/donate", "tab");
+                        window.gZenLibrary.close();
+                    });
+                    donateBtn.classList.add("sidebar-button-donate");
+                    donateBtn.dataset.id = "donate";
+
+                    footer.appendChild(exitBtn);
+                    footer.appendChild(donateBtn);
+                    sidebar.appendChild(footer);
+                    container.appendChild(sidebar);
+
+                    const panel = document.createElement("div");
+                    panel.id = "zen-library-main-panel";
+                    panel.innerHTML = `
+                        <header class="library-header"></header>
+                        <div class="library-content"></div>
+                    `;
+                    container.appendChild(panel);
+                    this.shadowRoot.appendChild(container);
+
+                    this._initialized = true;
+                }
+                // Outside the _initialized guard so a re-connect re-arms it after
+                // disconnectedCallback took it off. Re-adding the same function reference
+                // is a no-op, so running this on every connect is safe.
+                if (this._colorSchemeQuery) {
+                    this._colorSchemeQuery.addEventListener("change", this._updateColors);
+                }
+                this.setAttribute("active-tab", this.activeTab);
+                this._syncSectionStyles();
+                this.update();
+            } catch (e) {
+                console.error("ZenLibrary Error in connectedCallback:", e);
+            }
+        }
+
+        _orderedSidebarSectionIds() {
+            const visible = new Set(getVisibleSectionIds());
+            const ordered = BUILTIN_SECTION_ORDER.filter(id => visible.delete(id));
+            const extras = [...visible].sort((a, b) => {
+                const ao = SECTIONS[a]?.order ?? 1000;
+                const bo = SECTIONS[b]?.order ?? 1000;
+                return ao - bo || a.localeCompare(b);
+            });
+            return [...extras.filter(id => (SECTIONS[id]?.order ?? 1000) < 0), ...ordered, ...extras.filter(id => (SECTIONS[id]?.order ?? 1000) >= 0)];
+        }
+
+        _labelForSection(id) {
+            return SECTIONS[id]?.label || id.charAt(0).toUpperCase() + id.slice(1);
+        }
+
+        _syncSectionStyles() {
+            if (!this.shadowRoot) return;
+            this._sectionStyleLinks ||= new Map();
+            const wanted = new Set();
+            for (const [id, section] of Object.entries(SECTIONS)) {
+                const styles = Array.isArray(section.styles)
+                    ? section.styles
+                    : (section.style ? [section.style] : []);
+                for (const href of styles) {
+                    if (!href || wanted.has(href)) continue;
+                    wanted.add(href);
+                    if (this._sectionStyleLinks.has(href)) continue;
+                    const link = document.createElement("link");
+                    link.rel = "stylesheet";
+                    link.href = href;
+                    link.dataset.sectionId = id;
+                    this.shadowRoot.appendChild(link);
+                    this._sectionStyleLinks.set(href, link);
+                }
+            }
+            for (const [href, link] of this._sectionStyleLinks) {
+                if (wanted.has(href)) continue;
+                link.remove();
+                this._sectionStyleLinks.delete(href);
+            }
+        }
+
+        _rebuildSidebar() {
+            if (!this._sidebarItemsContainer) return;
+            this._sidebarItemsContainer.textContent = "";
+            this._sidebarItemEls = {};
+            const parser = this._sidebarIconParser || (this._sidebarIconParser = new DOMParser());
+            for (const id of this._orderedSidebarSectionIds()) {
                         const item = document.createElement("div");
                         item.className = "sidebar-button";
                         item.dataset.id = id;
 
-                        let iconSvg;
+                        let iconSvg = SECTIONS[id]?.iconSvg || null;
                         if (id === "downloads") {
                             iconSvg = `
 <svg class="zen-downloads-icon" width="28" height="28" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -618,7 +768,7 @@
 
                         const labelSpan = document.createElement("span");
                         labelSpan.className = "label";
-                        labelSpan.textContent = id.charAt(0).toUpperCase() + id.slice(1);
+                        labelSpan.textContent = this._labelForSection(id);
                         item.appendChild(labelSpan);
 
                         item.onclick = () => {
@@ -630,65 +780,8 @@
                             }
                             else this.activeTab = id;
                         };
-                        sidebarItemsContainer.appendChild(item);
+                        this._sidebarItemsContainer.appendChild(item);
                         this._sidebarItemEls[id] = item;
-                    });
-                    sidebar.appendChild(sidebarItemsContainer);
-
-                    const footer = document.createElement("div");
-                    footer.className = "sidebar-button-footer";
-
-                    // Native toolbarbuttons like Zen's sidebar action buttons
-                    // (#zen-expand-sidebar-button): list-style-image + context-fill,
-                    // themed by --toolbarbutton-icon-fill. The image URL lives in CSS
-                    // so it matches how Zen declares every other toolbar icon.
-                    const makeFooterButton = (title, command) => {
-                        const btn = document.createXULElement("toolbarbutton");
-                        btn.className = "toolbarbutton-1 chromeclass-toolbar-additional zen-sidebar-action-button sidebar-footer-button";
-                        // XUL tooltips read tooltiptext, not title.
-                        btn.setAttribute("tooltiptext", title);
-                        btn.setAttribute("aria-label", title);
-                        btn.addEventListener("command", command);
-                        return btn;
-                    };
-
-                    const exitBtn = makeFooterButton("Exit Library", () => window.gZenLibrary.close());
-                    exitBtn.classList.add("sidebar-button-exit");
-                    exitBtn.dataset.id = "exit";
-
-                    const donateBtn = makeFooterButton("Donate to Zen", () => {
-                        window.openTrustedLinkIn("https://www.zen-browser.app/donate", "tab");
-                        window.gZenLibrary.close();
-                    });
-                    donateBtn.classList.add("sidebar-button-donate");
-                    donateBtn.dataset.id = "donate";
-
-                    footer.appendChild(exitBtn);
-                    footer.appendChild(donateBtn);
-                    sidebar.appendChild(footer);
-                    container.appendChild(sidebar);
-
-                    const panel = document.createElement("div");
-                    panel.id = "zen-library-main-panel";
-                    panel.innerHTML = `
-                        <header class="library-header"></header>
-                        <div class="library-content"></div>
-                    `;
-                    container.appendChild(panel);
-                    this.shadowRoot.appendChild(container);
-
-                    this._initialized = true;
-                }
-                // Outside the _initialized guard so a re-connect re-arms it after
-                // disconnectedCallback took it off. Re-adding the same function reference
-                // is a no-op, so running this on every connect is safe.
-                if (this._colorSchemeQuery) {
-                    this._colorSchemeQuery.addEventListener("change", this._updateColors);
-                }
-                this.setAttribute("active-tab", this.activeTab);
-                this.update();
-            } catch (e) {
-                console.error("ZenLibrary Error in connectedCallback:", e);
             }
         }
 
@@ -719,6 +812,13 @@
             easels: ".easel-card-grid",
             spaces: null
         };
+
+        _sectionContainerSelector(id) {
+            if (Object.prototype.hasOwnProperty.call(ZenLibraryElement.SECTION_CONTAINERS, id)) {
+                return ZenLibraryElement.SECTION_CONTAINERS[id];
+            }
+            return SECTIONS[id]?.containerSelector ?? ".library-list-container";
+        }
 
         // Native zen-library: 84px sidebar + 27rem content (media/spaces size themselves). Never wider than 95vw.
         // Pure DOM-free math so the controller can apply it before the host is inserted and styled for the first time.
@@ -900,7 +1000,7 @@
 
                 // Spaces always rebuilds (its render() restores scroll itself); the others only
                 // when the tab changed, the caller forced it, or their container is missing.
-                const container = ZenLibraryElement.SECTION_CONTAINERS[this.activeTab];
+                const container = this._sectionContainerSelector(this.activeTab);
                 const mounted = contentBelongsToTab && (!container || content.querySelector(container));
                 if (container && mounted && !tabChanged && !force) return;
 
@@ -987,7 +1087,7 @@
             this.store = new ZenStore({ history: [] });
 
             // Persistent module instances for background pre-fetching
-            this._modules = Object.fromEntries(SECTION_IDS.map(id => [id, null]));
+            this._modules = Object.fromEntries(getSectionIds().map(id => [id, null]));
 
             this._init();
         }
@@ -1114,13 +1214,8 @@
          * Initialize persistent module instances and trigger background data fetching
          */
         _initModules() {
-            // Create a minimal "shell" object for modules that need library.el helper
             const shell = this._createModuleShell();
-
-            // An instance the panel created before this timer fired is kept and init'ed
-            // here instead of being shadowed by a second one; every init() guards itself.
-            // Media has no init on purpose: its scan is a Downloads-folder walk.
-            for (const id of SECTION_IDS) {
+            for (const id of getSectionIds()) {
                 try {
                     const Ctor = window[SECTIONS[id].global];
                     if (!this._modules[id] && Ctor) this._modules[id] = new Ctor(shell);
@@ -1391,13 +1486,13 @@
         _readLastActiveTab() {
             try {
                 const tab = Services.prefs.getStringPref("zen.library.last-tab", DEFAULT_TAB);
-                if (SECTION_IDS.includes(tab)) return tab;
+                if (isSectionRegistered(tab) && !SECTIONS[tab]?.hidden) return tab;
             } catch (e) { }
             return DEFAULT_TAB;
         }
 
         _writeLastActiveTab(tabName) {
-            if (!SECTION_IDS.includes(tabName)) return;
+            if (!isSectionRegistered(tabName) || SECTIONS[tabName]?.hidden) return;
             try {
                 Services.prefs.setStringPref("zen.library.last-tab", tabName);
             } catch (e) { }
@@ -2100,10 +2195,10 @@
 
         /**
          * Open the library with a specific tab selected, or close if already on that tab
-         * @param {string} tabName - One of SECTION_IDS
+         * @param {string} tabName - Registered section id
          */
         openTab(tabName) {
-            if (!SECTION_IDS.includes(tabName)) return;
+            if (!isSectionRegistered(tabName)) return;
 
             // If already open on the same tab, close the library
             if (this._isOpen && this._element && this._element.activeTab === tabName) {
