@@ -321,6 +321,10 @@
   list-style-image: url("chrome://browser/skin/zen-icons/heart-circle-fill.svg");
 }
 
+:host .sidebar-button-settings {
+  list-style-image: url("chrome://browser/skin/zen-icons/settings.svg");
+}
+
 /* Same wash as .sidebar-button:hover. :host toolbarbutton.sidebar-footer-button
    is more specific than .sidebar-footer-button:hover, so hover has to repeat
    that selector or the resting rule (or XUL appearance) wins and nothing paints. */

@@ -656,15 +656,29 @@
                     exitBtn.classList.add("sidebar-button-exit");
                     exitBtn.dataset.id = "exit";
 
-                    const donateBtn = makeFooterButton("Donate to Zen", () => {
-                        window.openTrustedLinkIn("https://www.zen-browser.app/donate", "tab");
-                        window.gZenLibrary.close();
-                    });
-                    donateBtn.classList.add("sidebar-button-donate");
-                    donateBtn.dataset.id = "donate";
+                    // The second footer slot is Donate or the Library's own settings (zen.library.footer-button).
+                    // Read on every build: the element is recreated per open(), so a pref change lands on the next open.
+                    let footerMode = "donate";
+                    try { footerMode = Services.prefs.getStringPref("zen.library.footer-button", "donate"); } catch (e) { }
+                    let secondBtn;
+                    if (footerMode === "settings") {
+                        secondBtn = makeFooterButton("Library settings", () => {
+                            window.gZenLibrary.openSettings();
+                            window.gZenLibrary.close();
+                        });
+                        secondBtn.classList.add("sidebar-button-settings");
+                        secondBtn.dataset.id = "settings";
+                    } else {
+                        secondBtn = makeFooterButton("Donate to Zen", () => {
+                            window.openTrustedLinkIn("https://www.zen-browser.app/donate", "tab");
+                            window.gZenLibrary.close();
+                        });
+                        secondBtn.classList.add("sidebar-button-donate");
+                        secondBtn.dataset.id = "donate";
+                    }
 
                     footer.appendChild(exitBtn);
-                    footer.appendChild(donateBtn);
+                    footer.appendChild(secondBtn);
                     sidebar.appendChild(footer);
                     container.appendChild(sidebar);
 
@@ -2029,6 +2043,10 @@
                 clearTimeout(this._initTimer);
                 this._initTimer = null;
             }
+            if (this._settingsPoll) {
+                clearInterval(this._settingsPoll);
+                this._settingsPoll = null;
+            }
 
             // A module may hold resources the DOM knows nothing about — blob: object URLs,
             // store subscriptions, a playing <audio>.
@@ -2124,6 +2142,46 @@
             // Otherwise, open the library (it will use lastActiveTab)
             this.open();
         }
+
+        /**
+         * Open about:preferences on Sine Mods and pop this mod's settings dialog.
+         * Same tab reuse as Firefox's openPreferences; the dialog click is best-effort
+         * because Sine fills #sineModsList asynchronously after the page loads.
+         */
+        openSettings() {
+            const url = "about:preferences#sineMods";
+            try {
+                window.switchToTabHavingURI(url, true, {
+                    ignoreFragment: "whenComparingAndReplace",
+                    replaceQueryString: true,
+                    triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()
+                });
+            } catch (e) {
+                window.openTrustedLinkIn(url, "tab");
+            }
+
+            if (this._settingsPoll) clearInterval(this._settingsPoll);
+            const browser = window.gBrowser?.selectedBrowser;
+            if (!browser) return;
+            // about:preferences runs in-process in this build (Sine reads its contentWindow too);
+            // if it ever goes remote the page still opens, only the dialog click is skipped.
+            const deadline = Date.now() + 5000;
+            this._settingsPoll = setInterval(() => {
+                const stop = () => { clearInterval(this._settingsPoll); this._settingsPoll = null; };
+                if (!browser.isConnected || Date.now() > deadline) return stop();
+                let btn = null;
+                try {
+                    const doc = browser.contentWindow?.document;
+                    if (doc?.location?.href.startsWith("about:preferences")) {
+                        btn = doc.querySelector('.sineItem[mod-id="zen-library"] .sineItemConfigureButton');
+                    }
+                } catch (e) { return stop(); }
+                if (!btn) return;
+                stop();
+                btn.click();
+            }, 100);
+        }
+
         open() {
             if (this._isOpen) {
                 return;

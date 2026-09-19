@@ -30,6 +30,34 @@
   },
   {
     "type": "separator",
+    "label": "Panel",
+    "margin": "20px 0 10px 0"
+  },
+  {
+    "type": "dropdown",
+    "property": "zen.library.footer-button",
+    "label": "Button under the sidebar",
+    "defaultValue": "donate",
+    "placeholder": "Select an option",
+    "options": [
+      {
+        "label": "Donate to Zen",
+        "value": "donate"
+      },
+      {
+        "label": "Library settings",
+        "value": "settings"
+      }
+    ]
+  },
+  {
+    "type": "text",
+    "label": "The second button in the panel's sidebar footer, next to Exit. Donate opens zen-browser.app/donate; Library settings opens this page. Applies the next time the panel opens.",
+    "size": "12px",
+    "margin": "0 0 8px 0"
+  },
+  {
+    "type": "separator",
     "label": "Shortcuts",
     "margin": "20px 0 10px 0"
   },
