@@ -2162,6 +2162,8 @@
                 return null;
             }
             if (!folder) return null;
+            // A folder has no colour of its own; ATG keeps the group's for a convert back.
+            try { folder._atgColorMemo = globalThis.advancedTabGroups?.captureGroupColor?.(group) ?? null; } catch (e) { }
 
             const canNest = this._folderDepthAllows(folder);
             for (const child of children) {
@@ -2204,6 +2206,9 @@
             group.setAttribute("zen-workspace-id", wsId);
             if (this._isGroupCollapsed(folder)) group.setAttribute("collapsed", "true");
             this._placeGroup(group, wsId, false, { parent, ref, after });
+            // Same colour it had as a group (captured by _convertGroupToFolder), set before ATG's
+            // observer processes the new element and would default it to favicon mode.
+            try { globalThis.advancedTabGroups?.restoreGroupColor?.(group, folder._atgColorMemo); } catch (e) { }
 
             for (const item of items) {
                 try {

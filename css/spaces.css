@@ -572,7 +572,7 @@
     margin-inline-start: var(--zen-folder-indent, 14px);
 }
 
-.tab-group-folder-icon,
+/* .folder-icon only — as a window-wide user sheet, a bare .tab-group-folder-icon would move the sidebar's zen-folder icons */
 .folder-icon {
     width: 28px;
     height: 28px;
